@@ -38,11 +38,16 @@ from .engine import (
     DEFAULT_HOST,
     DEFAULT_PORT,
     YakEngine,
+    clear_fuzzer_history,
+    delete_fuzzer_label,
     find_yakit_engine,
     find_yakit_gui,
+    list_fuzzer_history,
+    list_fuzzer_labels,
     parse_http_packet,
     query_http_flows,
     replay_packet,
+    save_fuzzer_label,
 )
 
 mcp = FastMCP("yakit-mcp")
@@ -395,6 +400,76 @@ def yakit_query_flows(keyword: str = "", limit: int = 20) -> str:
     """
     engine = get_engine()
     r = query_http_flows(engine, keyword=keyword, limit=limit)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# 工具 7: 清空 Web Fuzzer 历史（解决旧内容残留）
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def yakit_clear_history(task_id: int = 0) -> str:
+    """
+    清空 Yakit Web Fuzzer 历史任务（数据库层删除）。
+    GUI 的"历史 tab 列表"（数字 tab）刷新后旧请求不再显示，解决"旧内容残留"问题。
+    参数:
+      task_id: 指定任务 id（0 = 删除全部，默认）
+    返回: {ok, deleted_all, remaining}
+    """
+    engine = get_engine()
+    r = clear_fuzzer_history(engine, task_id=task_id)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# 工具 8: 列出 Web Fuzzer 历史任务
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def yakit_list_tasks() -> str:
+    """
+    列出 Yakit Web Fuzzer 历史任务（GUI 历史 tab 的数据源）。
+    返回: 任务 id/host/端口/流量数/成功失败数/创建时间
+    """
+    engine = get_engine()
+    r = list_fuzzer_history(engine)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# 工具 9/10/11: 分组标签管理
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def yakit_list_labels() -> str:
+    """
+    列出 Yakit Web Fuzzer 分组标签（如"爆破 ID"“爆破密码"等）。
+    返回: 标签 id/名称/描述/hash
+    """
+    engine = get_engine()
+    r = list_fuzzer_labels(engine)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_add_label(label: str, description: str = "") -> str:
+    """
+    新建 Yakit Web Fuzzer 分组标签。
+    参数:
+      label: 标签名（如"登录爆破"）
+      description: 描述（可选）
+    """
+    engine = get_engine()
+    r = save_fuzzer_label(engine, label, description)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_delete_label(hash_value: str) -> str:
+    """
+    删除 Yakit Web Fuzzer 分组标签（按 hash 删除）。
+    参数:
+      hash_value: 标签的 hash（用 yakit_list_labels 查询）
+    """
+    engine = get_engine()
+    r = delete_fuzzer_label(engine, hash_value)
     return json.dumps(r, ensure_ascii=False, indent=2)
 
 

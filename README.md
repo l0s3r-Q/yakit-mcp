@@ -29,6 +29,9 @@
 | 批量重放 | JSON 数组批量发包 |
 | 历史查询 | 查引擎库中的 HTTP 流量记录 |
 | 报文解析 | 提取 method/host/headers/body/协议线索 |
+| **清空历史** | **数据库层删除 Web Fuzzer 历史任务（根治"旧内容残留"）** |
+| **任务列表** | 列出 Web Fuzzer 历史任务（历史 tab 数据源） |
+| **分组标签** | Web Fuzzer 分组标签的增/查/删（如"登录爆破"分组） |
 
 ## 快速开始
 
@@ -180,6 +183,23 @@ yakit_mcp.cdp
 
 proto 从 Yakit GUI `app.asar` 提取（`protos/grpc.proto`），用 `grpc_tools.protoc` 生成 Python 类。
 
+## 工具清单（12 个）
+
+| 工具 | 说明 |
+|------|------|
+| `yakit_status()` | 引擎/GUI 状态、版本、路径 |
+| `yakit_replay(packet, auto_protocol, try_both, sync_gui_https, proxy, timeout, save_to_gui, capture, ...)` | **核心**：重放 + 协议双试 + GUI 联动 + 可选截图 |
+| `yakit_replay_batch(packets_json, is_https, concurrency)` | 批量重放 |
+| `yakit_open_webfuzzer(launch_gui)` | 用 CDP 打开/启动 Yakit Web Fuzzer 页面 |
+| `yakit_capture(window_title, output_dir, prefer_cdp)` | 截取 Yakit 画面（CDP → PrintWindow 三级降级） |
+| `yakit_query_flows(keyword, limit)` | 查询历史 HTTP 流量 |
+| `yakit_parse_packet(packet)` | 解析报文（method/host/headers/body/协议线索） |
+| `yakit_clear_history(task_id)` | **清空 Web Fuzzer 历史**（根治"旧内容残留"，数据库层） |
+| `yakit_list_tasks()` | 列出 Web Fuzzer 历史任务（历史 tab 数据源） |
+| `yakit_list_labels()` | 列出分组标签 |
+| `yakit_add_label(label, description)` | 新建分组标签 |
+| `yakit_delete_label(hash)` | 删除分组标签 |
+
 ## 项目结构
 
 ```
@@ -214,11 +234,24 @@ args    = ["C:\\...\\yakit-mcp\\yakit_mcp\\server.py"]
 
 `SKILL.md` 放到 skills 目录（触发词自动发现）。
 
-## 已知限制（v0.1-beta）
+## 已知限制（v0.2-beta）
 
-- 新增/关闭 Tab 按钮（`+`/`×`）依赖 hover 显示，已实现多级查找逻辑，需在 GUI 长时间运行的真实环境完整验证
+- CDP 新增/关闭 Tab（`+`/`×` 按钮）依赖 hover 显示，已实现多级查找逻辑，需在 GUI 长时间运行的真实环境完整验证
+- **"旧内容残留"已从数据库层根治**（`yakit_clear_history` 删除 `web_fuzzer_tasks`/`web_fuzzer_configs`），不再依赖脆弱的 Monaco UI 清空
 - Yakit 首次启动的引导弹窗（项目管理/版本提示）已自适应处理，但极端状态（引擎版本不匹配循环弹窗）可能仍需手动介入一次
 - 截图依赖 Yakit GUI 可见（CDP 模式）；GUI 不在时降级为渲染视图
+
+## 逆向分析成果（Web Fuzzer 存储机制）
+
+通过静态逆向 Yakit GUI `app.asar` 的 main.js + SQLite 数据库分析，确认：
+
+| 数据 | 存储位置 | 管理方式 |
+|------|---------|---------|
+| 历史任务（数字 tab 列表） | `web_fuzzer_tasks`（`raw_fuzz_task_request` 存请求 JSON） | gRPC `DeleteHistoryHTTPFuzzerTask` |
+| 任务响应 | `web_fuzzer_responses`（`content` 存响应 JSON） | 随任务级联删除 |
+| 配置归档 | `web_fuzzer_configs`（PageId/type/config） | gRPC `DeleteFuzzerConfig(DeleteAll)` |
+| 分组标签 | `FuzzerLabel`（Label/Description/Hash） | gRPC `SaveFuzzerLabel`/`QueryFuzzerLabel`/`DeleteFuzzerLabel` |
+| 当前编辑器内容 | 前端内存态（打开时从最近历史加载） | 新开 tab + 填包解决 |
 
 ## 开发作者
 

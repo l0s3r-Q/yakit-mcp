@@ -351,3 +351,97 @@ def query_http_flows(engine: YakEngine, keyword: str = "", limit: int = 20) -> d
         return {"ok": True, "total": resp.Total, "flows": flows}
     except Exception as e:
         return {"ok": False, "reason": repr(e)}
+
+
+def clear_fuzzer_history(engine: YakEngine, task_id: int = 0, clear_configs: bool = True) -> dict:
+    """
+    清空 Web Fuzzer 历史（数据库层，解决"旧内容残留"）。
+    1. 删除历史任务（web_fuzzer_tasks → UI 历史 tab 列表消失）
+    2. 可选: 清空 fuzzer 配置归档（web_fuzzer_configs）
+    task_id=0 时删除全部任务；指定 id 只删该任务。
+    """
+    stub = engine.connect()
+    result = {}
+    try:
+        req = ypb.DeleteHistoryHTTPFuzzerTaskRequest(Id=task_id)
+        stub.DeleteHistoryHTTPFuzzerTask(req)
+        resp = stub.QueryHistoryHTTPFuzzerTask(ypb.Empty())
+        result["remaining_tasks"] = len(list(resp.Tasks if resp.Tasks else []))
+        result["tasks_ok"] = True
+    except Exception as e:
+        result["tasks_ok"] = False
+        result["tasks_reason"] = repr(e)
+
+    if clear_configs:
+        try:
+            r = stub.DeleteFuzzerConfig(ypb.DeleteFuzzerConfigRequest(DeleteAll=True))
+            result["configs_ok"] = True
+            result["configs_deleted"] = r.EffectRows
+        except Exception as e:
+            result["configs_ok"] = False
+            result["configs_reason"] = repr(e)
+
+    result["ok"] = result.get("tasks_ok", False) or result.get("configs_ok", False)
+    result["deleted_all"] = task_id == 0
+    return result
+
+
+def list_fuzzer_history(engine: YakEngine) -> dict:
+    """列出 Web Fuzzer 历史任务（tab 数据源）"""
+    stub = engine.connect()
+    try:
+        resp = stub.QueryHistoryHTTPFuzzerTask(ypb.Empty())
+        tasks = []
+        for t in resp.Tasks or []:
+            tasks.append({
+                "id": t.Id,
+                "host": t.Host,
+                "port": t.Port,
+                "http_flow_total": t.HTTPFlowTotal,
+                "success": t.HTTPFlowSuccessCount,
+                "failed": t.HTTPFlowFailedCount,
+                "created_at": t.CreatedAt,
+            })
+        return {"ok": True, "total": len(tasks), "tasks": tasks}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def list_fuzzer_labels(engine: YakEngine) -> dict:
+    """列出 Web Fuzzer 分组标签（FuzzerLabel）"""
+    stub = engine.connect()
+    try:
+        resp = stub.QueryFuzzerLabel(ypb.Empty())
+        labels = []
+        for l in resp.Data or []:
+            labels.append({
+                "id": l.Id,
+                "label": l.Label,
+                "description": l.Description,
+                "hash": l.Hash,
+            })
+        return {"ok": True, "total": len(labels), "labels": labels}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def save_fuzzer_label(engine: YakEngine, label: str, description: str = "") -> dict:
+    """新建 Web Fuzzer 分组标签"""
+    stub = engine.connect()
+    try:
+        stub.SaveFuzzerLabel(ypb.SaveFuzzerLabelRequest(Data=[
+            ypb.FuzzerLabel(Label=label, Description=description)
+        ]))
+        return {"ok": True, "label": label, "description": description}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def delete_fuzzer_label(engine: YakEngine, hash_value: str) -> dict:
+    """删除 Web Fuzzer 分组标签（按 hash）"""
+    stub = engine.connect()
+    try:
+        stub.DeleteFuzzerLabel(ypb.DeleteFuzzerLabelRequest(Hash=hash_value))
+        return {"ok": True, "hash": hash_value}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
