@@ -1,0 +1,6 @@
+mcp>=1.26,<2
+grpcio>=1.60
+grpcio-tools>=1.60
+Pillow>=10.0
+mss>=9.0
+pywinauto>=0.6.8

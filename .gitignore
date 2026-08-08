@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# 环境
+.env
+.venv/
+venv/
+
+# 截图/日志（运行产物）
+screenshots/
+engine.log
+*.png
+!tests/expected/*.png
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# 系统
+Thumbs.db
+.DS_Store
