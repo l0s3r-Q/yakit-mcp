@@ -5,6 +5,7 @@ yakit-mcp: Yakit 引擎 gRPC 驱动 + GUI 联动 + 窗口截图
 """
 from __future__ import annotations
 
+import json
 import os
 import socket
 import subprocess
@@ -18,15 +19,20 @@ from . import grpc_pb2 as ypb
 from . import grpc_pb2_grpc as ygrpc
 
 
-class _AuthInterceptor(grpc.UnaryUnaryClientInterceptor):
-    """gRPC 客户端拦截器: 为每个请求注入 authorization metadata（local-password 模式）"""
+class _AuthInterceptor(grpc.UnaryUnaryClientInterceptor, grpc.StreamStreamClientInterceptor):
+    """gRPC 客户端拦截器: 为所有请求注入 authorization metadata（local-password 模式）"""
 
     def __init__(self, metadata):
         self._metadata = metadata
 
+    def _with_metadata(self, client_call_details):
+        return client_call_details._replace(metadata=self._metadata)
+
     def intercept_unary_unary(self, continuation, client_call_details, request):
-        new_details = client_call_details._replace(metadata=self._metadata)
-        return continuation(new_details, request)
+        return continuation(self._with_metadata(client_call_details), request)
+
+    def intercept_stream_stream(self, continuation, client_call_details, request_iterator):
+        return continuation(self._with_metadata(client_call_details), request_iterator)
 
 # ---------------------------------------------------------------------------
 # 常量
@@ -318,6 +324,44 @@ def detect_protocol(packet_text: str) -> str:
         return parse_http_packet(packet_text)["protocol_hint"]
     except Exception:
         return "unknown"
+
+
+def push_webfuzzer_tab(engine: YakEngine, packet: str, is_https: bool = False) -> dict:
+    """
+    【官方通道】通过 gRPC DuplexConnection 推送 web_fuzzer_tab 事件，
+    让 GUI 自动新建 Web Fuzzer tab 并填入请求（源码确认: MCP/后端通知前端新建 Web Fuzzer Tab）。
+    彻底绕开 Monaco 编辑器填包（解决旧内容残留 + 填包问题）。
+    返回: {ok, sent, reason}
+    """
+    stub = engine.connect()
+    try:
+        # 构造 duplex 请求: MessageType="web_fuzzer_tab", Data=JSON payload
+        payload = {
+            "openFlag": True,
+            "data": [
+                {
+                    "Config": json.dumps({
+                        "isHttps": is_https,
+                        "request": packet,
+                    }, ensure_ascii=False)
+                }
+            ],
+        }
+        req = ypb.DuplexConnectionRequest(
+            Data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+            MessageType="web_fuzzer_tab",
+            Timestamp=int(time.time() * 1000),
+        )
+        # 双向流: 发一条就够（服务端收到即推送前端）
+        responses = []
+        def gen():
+            yield req
+        for resp in stub.DuplexConnection(gen(), timeout=10):
+            responses.append(resp)
+            break
+        return {"ok": True, "sent": True, "payload": payload}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
 
 
 def replay_packet(

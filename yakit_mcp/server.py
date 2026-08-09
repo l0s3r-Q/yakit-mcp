@@ -45,6 +45,7 @@ from .engine import (
     list_fuzzer_history,
     list_fuzzer_labels,
     parse_http_packet,
+    push_webfuzzer_tab,
     query_http_flows,
     replay_packet,
     save_fuzzer_label,
@@ -384,6 +385,29 @@ def yakit_open_webfuzzer(launch_gui: bool = True) -> str:
     from .engine import find_yakit_gui
     gui = find_yakit_gui() or ""
     r = open_webfuzzer(gui_path=gui if launch_gui else "")
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# 工具: 官方通道 - 推送新建 Web Fuzzer Tab（带请求内容）
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def yakit_open_webfuzzer_with_packet(packet: str, is_https: bool = False) -> str:
+    """
+    【官方通道】通过 gRPC DuplexConnection 推送 web_fuzzer_tab 事件，
+    让 GUI 自动新建 Web Fuzzer tab 并填入请求内容（源码确认的 MCP 通道）。
+    彻底绕开 Monaco/CDP 填包——新开干净 tab + 请求自动填入，无旧内容残留。
+
+    Yakit 源码 (duplex.tsx): case 'web_fuzzer_tab': emiter.emit('onServerPushOpenWebFuzzerTab', ...)
+    // MCP / 后端通知前端新建 Web Fuzzer Tab
+
+    参数:
+      packet: 原始 HTTP 请求报文
+      is_https: 是否 HTTPS
+    返回: {ok, sent, payload}
+    """
+    engine = get_engine()
+    r = push_webfuzzer_tab(engine, packet, is_https)
     return json.dumps(r, ensure_ascii=False, indent=2)
 
 
