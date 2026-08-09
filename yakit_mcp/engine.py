@@ -76,7 +76,10 @@ class YakEngine:
         self._proc: subprocess.Popen | None = None
         self._channel: grpc.Channel | None = None
         self._stub: ygrpc.YakStub | None = None
-        self._home = os.environ.get("YAKIT_HOME", str(Path(os.environ.get("APPDATA", "")) / "Yakit"))
+        # 关键: 默认用 GUI 的项目目录（与 GUI 同一数据库，避免 database is closed / 数据不同步）
+        self._home = os.environ.get("YAKIT_HOME", str(Path(r"D:\My_apps\Yakit\yakit-projects")))
+        if not Path(self._home).exists():
+            self._home = os.environ.get("YAKIT_HOME", str(Path(os.environ.get("APPDATA", "")) / "Yakit"))
 
     # -- 端口探测 ----------------------------------------------------------
     @staticmethod
@@ -119,6 +122,11 @@ class YakEngine:
     def connect(self) -> ygrpc.YakStub:
         if self._stub and self._channel:
             return self._stub
+        # 修复: 先探测 GUI 是否在跑 + 探测真实引擎端口（GUI 引擎可能不在 10053）
+        if not self.is_running():
+            found = self._probe_engine_port()
+            if found:
+                self.port = found
         if self.auto_start and not self.is_running():
             if not self.start():
                 raise RuntimeError(f"引擎启动失败（{self.host}:{self.port}），请检查日志")
@@ -135,6 +143,35 @@ class YakEngine:
             raise RuntimeError(f"gRPC 连接失败: {e!r}")
         self._stub = ygrpc.YakStub(self._channel)
         return self._stub
+
+    def _probe_engine_port(self) -> int | None:
+        """探测可能存在的引擎端口（GUI 引擎实际端口）"""
+        candidates = [10053, 9011, 8087, 63333]
+        # 额外: 从 yak 进程的监听端口找
+        try:
+            import subprocess
+            out = subprocess.run(['netstat', '-ano'], capture_output=True, text=True, timeout=10).stdout
+            yak_pids = set()
+            tl = subprocess.run(['tasklist'], capture_output=True, text=True, timeout=10).stdout
+            for line in tl.split('\n'):
+                if 'yak' in line.lower() and 'yak_windows' in line.lower() or 'yak.exe' in line.lower():
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[1].isdigit():
+                        yak_pids.add(parts[1])
+            for line in out.split('\n'):
+                if 'LISTENING' in line:
+                    parts = line.split()
+                    if len(parts) >= 5 and parts[4] in yak_pids:
+                        addr = parts[1]
+                        port = int(addr.rsplit(':', 1)[-1])
+                        if port not in candidates:
+                            candidates.append(port)
+        except Exception:
+            pass
+        for p in candidates:
+            if self._port_open(self.host, p):
+                return p
+        return None
 
     @property
     def stub(self) -> ygrpc.YakStub:
