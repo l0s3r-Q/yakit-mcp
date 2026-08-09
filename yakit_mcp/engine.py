@@ -994,14 +994,16 @@ def query_risks(engine: YakEngine, keyword: str = "", limit: int = 50,
 # ---------------------------------------------------------------------------
 # 编码工具: Codec / DNSLog / 反连
 # ---------------------------------------------------------------------------
-def codec(engine: YakEngine, text: str, codec_type: str = "base64-encode") -> dict:
-    """编解码（Codec）。codec_type 用 yakit_codec_methods 查（如 base64-encode/url-encode/hex）"""
+def codec(engine: YakEngine, text: str, codec_type: str = "Base64Encode") -> dict:
+    """编解码（NewCodec 流式接口，前端同款）。codec_type 用 yakit_codec_methods 查（如 Base64Encode/Base64Decode/UrlEncode/SHA1）"""
     stub = engine.connect()
     try:
-        req = ypb.CodecRequest()
+        req = ypb.CodecRequestFlow()
         req.Text = text
-        req.Type = codec_type
-        resp = stub.Codec(req, timeout=30)
+        work = ypb.CodecWork()
+        work.CodecType = codec_type
+        req.WorkFlow.append(work)
+        resp = stub.NewCodec(req, timeout=30)
         return {"ok": True, "type": codec_type, "input": text[:500],
                 "result": resp.Result[:5000] if resp.Result else ""}
     except Exception as e:
@@ -1015,8 +1017,13 @@ def codec_methods(engine: YakEngine) -> dict:
         resp = stub.GetAllCodecMethods(ypb.Empty())
         methods = []
         for m in resp.Methods or []:
-            methods.append({"name": m.Name, "verbose": m.Verbose, "group": m.Group})
-        return {"ok": True, "total": len(methods), "methods": methods[:200]}
+            methods.append({
+                "tag": m.Tag,
+                "name": m.CodecName,
+                "method": m.CodecMethod,
+                "desc": m.Desc,
+            })
+        return {"ok": True, "total": len(methods), "methods": methods[:300]}
     except Exception as e:
         return {"ok": False, "reason": repr(e)}
 
