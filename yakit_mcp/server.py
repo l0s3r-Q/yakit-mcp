@@ -48,14 +48,21 @@ from yakit_mcp.engine import (
     clear_fuzzer_history,
     codec,
     codec_methods,
+    config_global_reverse,
+    create_webshell,
     delete_fuzzer_label,
     dnslog_domain,
     dnslog_query,
+    exec_batch_packet_plugin,
     exec_packet_plugin,
     exec_plugin,
+    exec_yak_code,
+    export_http_flows,
     extract_url,
     find_yakit_engine,
     find_yakit_gui,
+    generate_csrf_poc,
+    generate_webshell,
     list_fuzzer_history,
     list_fuzzer_labels,
     mitm_start,
@@ -69,6 +76,7 @@ from yakit_mcp.engine import (
     query_http_flows,
     query_hosts,
     query_mitm_flows,
+    query_payload,
     query_plugins,
     query_ports,
     query_risks,
@@ -78,8 +86,14 @@ from yakit_mcp.engine import (
     reverse_shell,
     reverse_shell_programs,
     save_fuzzer_label,
+    save_payload,
+    scan_async,
     simple_detect,
     start_brute,
+    task_list,
+    task_status,
+    task_wait,
+    webshell_basic_info,
     yso_gadgets,
     yso_generate,
 )
@@ -102,6 +116,14 @@ def get_engine() -> YakEngine:
 
 def _default_output_dir() -> str:
     return str(Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local")) / "yakit-mcp" / "screenshots")
+
+
+def _h(result_dict: dict) -> dict:
+    """人话化错误: 把 reason 翻译为可读信息"""
+    if isinstance(result_dict, dict) and not result_dict.get("ok") and result_dict.get("reason"):
+        from yakit_mcp.engine import humanize_error
+        result_dict["reason_human"] = humanize_error(result_dict["reason"])
+    return result_dict
 
 
 # ---------------------------------------------------------------------------
@@ -803,10 +825,38 @@ def yakit_exec_packet_plugin(script_name: str, packet: str) -> str:
 
 
 @mcp.tool()
+def yakit_exec_batch_packet_plugin(script_names: str, packet: str,
+                                   is_https: bool = False,
+                                   concurrent: int = 3,
+                                   timeout: float = 30) -> str:
+    """批量插件扫描：一个包跑多个插件（逗号分隔插件名），返回各插件状态/是否可利用。"""
+    engine = get_engine()
+    r = exec_batch_packet_plugin(engine, script_names, packet, is_https, concurrent, timeout)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
 def yakit_plugin_tags() -> str:
     """获取 Yakit 插件的标签列表（用于筛选插件）。"""
     engine = get_engine()
     r = plugin_tags(engine)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_exec_script(code: str, params: str = "", work_dir: str = "",
+                      timeout: float = 60) -> str:
+    """
+    通用 Yak 脚本执行（等价 Yakit 的 Yak Runner）。
+    code: Yak 代码字符串，如:
+      - 简单计算: `dump(1+1)`
+      - 发请求: `rsp, req = poc.HTTP("http://example.com")~ dump(rsp.RawPacket)`
+      - 端口扫描: `results, err = servicescan.Scan("127.0.0.1", "80,443")`
+    params: 可选参数 JSON
+    返回: 脚本执行输出流。
+    """
+    engine = get_engine()
+    r = exec_yak_code(engine, code, params, work_dir, timeout)
     return json.dumps(r, ensure_ascii=False, indent=2)
 
 
@@ -880,6 +930,148 @@ def yakit_webshell_ping(webshell_id: int) -> str:
     """Ping WebShell（按 id 验证连通性，返回系统信息）。"""
     engine = get_engine()
     r = ping_webshell(engine, webshell_id)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# 长任务异步化: 后台扫描任务
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def yakit_scan_start(task_type: str, targets: str, ports: str = "80,443",
+                     service_type: str = "ssh", username: str = "",
+                     password: str = "", concurrent: int = 100) -> str:
+    """
+    启动后台扫描任务（立即返回 task_id，不阻塞）。
+    task_type: port_scan（端口扫描）/ simple_detect（漏洞检测）/ brute（弱口令爆破）
+    后续用 yakit_task_status(task_id) 查询进度/结果，或 yakit_task_wait(task_id) 等待完成。
+    """
+    engine = get_engine()
+    r = scan_async(engine, task_type, targets, ports, service_type,
+                   username, password, concurrent)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_task_status(task_id: str) -> str:
+    """查询后台任务状态 + 已收集的结果（progress/status/results）。"""
+    r = task_status(task_id)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_task_wait(task_id: str, timeout: float = 120) -> str:
+    """等待后台任务完成（轮询，最多 timeout 秒），返回最终结果。"""
+    r = task_wait(task_id, timeout=timeout)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_task_list() -> str:
+    """列出所有后台扫描任务及其状态。"""
+    r = task_list()
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# 高级能力: CSRF / 流量导出 / 字典 / WebShell / 反连
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def yakit_generate_csrf_poc(packet: str, is_https: bool = False) -> str:
+    """从 HTTP 请求包生成 CSRF POC HTML。"""
+    engine = get_engine()
+    r = generate_csrf_poc(engine, packet, is_https)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_export_flows(keyword: str = "", limit: int = 100,
+                       source_type: str = "") -> str:
+    """导出 HTTP 流量（含请求/响应全文）—— 取证/协作用。"""
+    engine = get_engine()
+    r = export_http_flows(engine, keyword, limit, source_type)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_payload_query(group: str, folder: str = "") -> str:
+    """查询字典内容（按组/文件夹）。"""
+    engine = get_engine()
+    r = query_payload(engine, group, folder)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_payload_save(group: str, content: str, folder: str = "",
+                       is_new: bool = False) -> str:
+    """保存字典内容到指定组。"""
+    engine = get_engine()
+    r = save_payload(engine, group, content, folder, is_new)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_webshell_create(url: str, password: str, shell_type: str = "php",
+                          tag: str = "", remark: str = "", proxy: str = "") -> str:
+    """创建 WebShell 记录。"""
+    engine = get_engine()
+    r = create_webshell(engine, url, password, shell_type, tag, remark, proxy)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_webshell_info(webshell_id: int) -> str:
+    """获取 WebShell 系统信息（GetBasicInfo）。"""
+    engine = get_engine()
+    r = webshell_basic_info(engine, webshell_id)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_webshell_generate(shell_type: str = "php", passwd: str = "cmd",
+                            confuse: bool = False, enc_mode: str = "base64",
+                            is_session: bool = False) -> str:
+    """生成 WebShell 脚本（支持混淆/加密模式）。"""
+    engine = get_engine()
+    r = generate_webshell(engine, shell_type, passwd, confuse, enc_mode, is_session)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_reverse_configure(tunnel_addr: str = "", tunnel_secret: str = "",
+                            local_addr: str = "") -> str:
+    """配置全局反连服务器（tunnel_addr 必填，如 1.2.3.4:8088；local_addr 可选本地监听）。"""
+    engine = get_engine()
+    r = config_global_reverse(engine, tunnel_addr, tunnel_secret, local_addr)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# 场景组合工具
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def yakit_quick_scan(target: str, ports: str = "80,443,8080,3306,22",
+                     wait: bool = True, wait_timeout: float = 180) -> str:
+    """
+    一键综合扫描：端口扫描 + 指纹识别 + 漏洞检测（后台任务链）。
+    返回: 任务 task_id（wait=True 时等待完成返回端口/漏洞摘要）。
+    推荐流程: 先 yakit_quick_scan 拿端口 → 再对开放端口做漏洞检测。
+    """
+    engine = get_engine()
+    from yakit_mcp.engine import scan_async, task_wait as _tw
+    r = scan_async(engine, "port_scan", target, ports=ports, concurrent=100)
+    if not r.get("ok"):
+        return json.dumps(r, ensure_ascii=False, indent=2)
+    tid = r["task_id"]
+    if wait:
+        fr = _tw(tid, timeout=wait_timeout)
+        # 附带资产查询
+        try:
+            from yakit_mcp.engine import query_ports
+            pr = query_ports(engine, hosts=target, limit=50)
+            fr["asset_ports"] = pr.get("ports", [])
+        except Exception:
+            pass
+        return json.dumps(fr, ensure_ascii=False, indent=2)
     return json.dumps(r, ensure_ascii=False, indent=2)
 
 

@@ -736,6 +736,78 @@ def query_mitm_flows(engine: YakEngine, after_id: int = 0, limit: int = 50,
 # ---------------------------------------------------------------------------
 # 主动扫描: 端口扫描 / 漏洞检测 / 弱口令爆破 / 爬虫
 # ---------------------------------------------------------------------------
+# 扫描结果摘要层: 把原始 JSON 流解析为结构化可用信息
+# ---------------------------------------------------------------------------
+def summarize_scan_events(raw_lines: list) -> dict:
+    """
+    解析 Yakit 扫描原始流（每行一个 JSON），提取:
+      - ports: 发现的开放端口（host:port/service）
+      - risks: 发现的漏洞/风险
+      - progress: 进度事件
+      - status_cards: 状态卡（如"单个IP扫描端口数"）
+      - logs: 关键日志（错误等）
+    """
+    ports, risks, progress, status_cards, errors = [], [], [], [], []
+    for line in raw_lines:
+        line = str(line).strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except Exception:
+            continue
+        ctype = obj.get("type", "")
+        content = obj.get("content", {})
+        if not isinstance(content, dict):
+            continue
+        data = content.get("data", "")
+        if ctype == "progress":
+            progress.append(content)
+            continue
+        # feature-status-card-data: 状态卡（JSON 字符串）
+        if ctype == "log" and content.get("level") == "feature-status-card-data":
+            try:
+                inner = json.loads(data)
+                status_cards.append(inner)
+            except Exception:
+                pass
+            continue
+        # 尝试解析 data 里的 JSON（漏洞/端口发现通常在这里）
+        try:
+            inner = json.loads(data) if isinstance(data, str) else data
+        except Exception:
+            inner = None
+        if isinstance(inner, dict):
+            # 端口发现: {"host":..., "port":..., "service":...}
+            if inner.get("port") is not None and inner.get("host"):
+                ports.append({
+                    "host": inner.get("host"),
+                    "port": inner.get("port"),
+                    "proto": inner.get("proto", ""),
+                    "service": inner.get("service", inner.get("service_type", "")),
+                })
+            # 漏洞/风险: {"risk_type"..., "title"...} 或 {"vuln"...}
+            elif inner.get("risk_type") or inner.get("title") or inner.get("vuln"):
+                risks.append({
+                    "title": inner.get("title", ""),
+                    "risk_type": inner.get("risk_type", ""),
+                    "severity": inner.get("severity", ""),
+                    "target": inner.get("host", inner.get("target", "")),
+                    "detail": str(inner)[:200],
+                })
+        # 错误日志
+        if content.get("level") in ("error", "fatal"):
+            errors.append(str(data)[:300])
+    return {
+        "ports_found": ports[:50],
+        "risks_found": risks[:50],
+        "progress_events": len(progress),
+        "status_cards": status_cards[:20],
+        "errors": errors[:10],
+        "total_events": len(raw_lines),
+    }
+
+
 def port_scan(engine: YakEngine, targets: str, ports: str = "80,443,8080",
               mode: str = "tcp", concurrent: int = 100, fingerprint_mode: str = "all") -> dict:
     """
@@ -780,8 +852,10 @@ def port_scan(engine: YakEngine, targets: str, ports: str = "80,443,8080",
             except Exception:
                 if "feature-status" not in line:
                     parsed.append({"raw": line[:300]})
+        summary = summarize_scan_events(results)
         return {"ok": True, "targets": targets, "ports": ports,
-                "total_events": len(results), "parsed": parsed[:60]}
+                "total_events": len(results), "parsed": parsed[:60],
+                "summary": summary}
     except Exception as e:
         return {"ok": False, "reason": repr(e)}
 
@@ -811,7 +885,8 @@ def simple_detect(engine: YakEngine, targets: str, ports: str = "80,443",
                 text = text.decode("utf-8", errors="replace")
             if text:
                 results.append(text)
-        return {"ok": True, "targets": targets, "results": results[:200]}
+        summary = summarize_scan_events(results)
+        return {"ok": True, "targets": targets, "results": results[:200], "summary": summary}
     except Exception as e:
         return {"ok": False, "reason": repr(e)}
 
@@ -831,13 +906,13 @@ def start_brute(engine: YakEngine, targets: str, service_type: str = "ssh",
     stub = engine.connect()
     try:
         req = ypb.StartBruteParams()
-        req.Target = targets
-        req.BruteType = service_type
+        req.Targets = targets
+        req.Type = service_type
         req.Concurrent = concurrent
         if username:
-            req.Username = username
+            req.Usernames.append(username)
         if password:
-            req.Password = password
+            req.Passwords.append(password)
         if username_file:
             req.UsernameFile = username_file
         if password_file:
@@ -845,9 +920,12 @@ def start_brute(engine: YakEngine, targets: str, service_type: str = "ssh",
         results = []
         for resp in stub.StartBrute(req, timeout=300):
             text = resp.Message or resp.Raw or b""
+            if isinstance(text, bytes):
+                text = text.decode("utf-8", errors="replace")
             if text:
                 results.append(text)
-        return {"ok": True, "target": targets, "type": service_type, "results": results[:100]}
+        summary = summarize_scan_events(results)
+        return {"ok": True, "target": targets, "type": service_type, "results": results[:100], "summary": summary}
     except Exception as e:
         return {"ok": False, "reason": repr(e)}
 
@@ -860,6 +938,146 @@ def brute_types(engine: YakEngine) -> dict:
         return {"ok": True, "types": list(resp.Types or [])}
     except Exception as e:
         return {"ok": False, "reason": repr(e)}
+
+
+def exec_yak_code(engine: YakEngine, code: str, params: str = "",
+                  work_dir: str = "", timeout: float = 60) -> dict:
+    """
+    通用 Yak 脚本执行（等价 Yakit 的 Yak Runner）。
+    code: Yak 代码字符串（如 `dump(1+1)`、`rsp, req = poc.HTTP(`...`)`）
+    params: 参数 JSON（可选）
+    返回: 执行输出（stdout/日志流）
+    """
+    stub = engine.connect()
+    try:
+        req = ypb.ExecRequest()
+        req.Script = code
+        if params:
+            try:
+                p = json.loads(params)
+                for k, v in p.items():
+                    item = ypb.ExecParamItem()
+                    item.Key = k
+                    item.Value = str(v)
+                    req.Params.append(item)
+            except Exception:
+                pass
+        if work_dir:
+            req.WorkDir = work_dir
+        results = []
+        for resp in stub.Exec(req, timeout=timeout + 30):
+            text = resp.Message or resp.Raw or b""
+            if isinstance(text, bytes):
+                text = text.decode("utf-8", errors="replace")
+            if text:
+                results.append(text[:2000])
+        return {"ok": True, "results": results[:100]}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+# ---------------------------------------------------------------------------
+# 长任务异步化: 启动后台扫描任务 + 状态查询
+# ---------------------------------------------------------------------------
+def scan_async(engine: YakEngine, task_type: str, targets: str,
+               ports: str = "80,443", service_type: str = "ssh",
+               username: str = "", password: str = "",
+               concurrent: int = 100, fingerprint_mode: str = "all") -> dict:
+    """
+    启动后台扫描任务（不阻塞调用，立即返回 task_id）。
+    task_type: port_scan / simple_detect / brute
+    用 yakit_task_status / yakit_task_wait 查询结果。
+    """
+    from .tasks import start_stream_task
+
+    stub = engine.connect()
+    if task_type == "port_scan":
+        req = ypb.PortScanRequest()
+        req.Targets = targets
+        req.Ports = ports
+        req.Mode = "tcp"
+        req.Concurrent = concurrent
+        req.FingerprintMode = fingerprint_mode
+        req.SaveToDB = True
+        tid = start_stream_task(f"port_scan {targets}", lambda: stub.PortScan(req, timeout=600))
+    elif task_type == "simple_detect":
+        scan = ypb.PortScanRequest()
+        scan.Targets = targets
+        scan.Ports = ports
+        scan.Mode = "tcp"
+        scan.Concurrent = concurrent
+        scan.SaveToDB = True
+        record = ypb.RecordPortScanRequest()
+        record.PortScanRequest.CopyFrom(scan)
+        tid = start_stream_task(f"simple_detect {targets}", lambda: stub.SimpleDetect(record, timeout=900))
+    elif task_type == "brute":
+        req = ypb.StartBruteParams()
+        req.Targets = targets
+        req.Type = service_type
+        req.Concurrent = concurrent
+        if username:
+            req.Usernames.append(username)
+        if password:
+            req.Passwords.append(password)
+        tid = start_stream_task(f"brute {targets} ({service_type})", lambda: stub.StartBrute(req, timeout=900))
+    else:
+        return {"ok": False, "reason": f"未知任务类型: {task_type}（支持 port_scan/simple_detect/brute）"}
+
+    return {"ok": True, "task_id": tid, "task_type": task_type, "hint": "用 yakit_task_status(task_id) 查询进度"}
+
+
+def task_list() -> dict:
+    """列出所有后台任务"""
+    from .tasks import list_tasks
+    return list_tasks()
+
+
+def task_status(task_id: str) -> dict:
+    """查询后台任务状态 + 结果（流式结果自动汇总 + 摘要提取）"""
+    from .tasks import get_task
+    r = get_task(task_id)
+    if not r.get("ok"):
+        return r
+    # 结果汇总: 从 ExecResult 流中提取有用信息
+    results = r.get("results") or []
+    parsed = []
+    raw_lines = []
+    for item in results:
+        text = ""
+        if hasattr(item, "Message") and item.Message:
+            text = item.Message.decode("utf-8", errors="replace") if isinstance(item.Message, bytes) else str(item.Message)
+        elif hasattr(item, "Raw") and item.Raw:
+            text = item.Raw.decode("utf-8", errors="replace") if isinstance(item.Raw, bytes) else str(item.Raw)
+        if text:
+            parsed.append(text[:500])
+            raw_lines.append(text)
+    r["results"] = parsed[:100]
+    if raw_lines:
+        r["summary"] = summarize_scan_events(raw_lines)
+    return r
+
+
+def task_wait(task_id: str, timeout: float = 120) -> dict:
+    """等待任务完成并返回结果"""
+    from .tasks import wait_task
+    r = wait_task(task_id, timeout=timeout)
+    if r.get("ok"):
+        results = r.get("results") or []
+        parsed = []
+        raw_lines = []
+        for item in results:
+            text = ""
+            if hasattr(item, "Message") and item.Message:
+                text = item.Message.decode("utf-8", errors="replace") if isinstance(item.Message, bytes) else str(item.Message)
+            elif hasattr(item, "Raw") and item.Raw:
+                text = item.Raw.decode("utf-8", errors="replace") if isinstance(item.Raw, bytes) else str(item.Raw)
+            if text:
+                parsed.append(text[:500])
+                raw_lines.append(text)
+        r["results"] = parsed[:100]
+        if raw_lines:
+            r["summary"] = summarize_scan_events(raw_lines)
+    return r
 
 
 def basic_crawler(engine: YakEngine, target: str, max_depth: int = 2,
@@ -1219,6 +1437,55 @@ def exec_packet_plugin(engine: YakEngine, script_name: str, packet: str,
         return {"ok": False, "reason": repr(e)}
 
 
+def exec_batch_packet_plugin(engine: YakEngine, script_names: str, packet: str,
+                             is_https: bool = False, concurrent: int = 3,
+                             timeout: float = 30) -> dict:
+    """
+    批量插件扫描（ExecuteBatchPacketYakScript）：一个包跑多个插件。
+    script_names: 逗号分隔插件名（如 "SQL注入,XXE检测,Fastjson综合检测"）
+    返回: 每个插件的状态/是否可利用/输出
+    """
+    stub = engine.connect()
+    try:
+        req = ypb.ExecuteBatchPacketYakScriptParams()
+        names = [n.strip() for n in script_names.split(",") if n.strip()]
+        if not names:
+            return {"ok": False, "reason": "script_names 为空"}
+        req.ScriptName.extend(names)
+        req.IsHttps = is_https
+        req.Request = packet.encode("utf-8")
+        req.Concurrent = concurrent
+        req.PerTaskTimeout = timeout
+        results = []
+        for resp in stub.ExecuteBatchPacketYakScript(req, timeout=timeout * 10 + 60):
+            if resp.ProgressMessage:
+                results.append({
+                    "type": "progress",
+                    "percent": round(resp.ProgressPercent, 2),
+                    "total": resp.ProgressTotal,
+                })
+                continue
+            item = {
+                "type": "result",
+                "id": resp.Id,
+                "ok": bool(resp.Ok),
+                "exploitable": bool(resp.Exploitable),
+                "status": resp.Status,
+                "reason": resp.Reason or "",
+                "script": resp.PoC.ScriptName if resp.PoC else "",
+            }
+            if resp.Result:
+                msg = resp.Result.Message or b""
+                if msg:
+                    item["output"] = msg.decode("utf-8", errors="replace")[:500]
+            results.append(item)
+        # 只保留结果 + 最后进度
+        final = [r for r in results if r.get("type") == "result"]
+        return {"ok": True, "scripts": names, "results": final[:50], "total_events": len(results)}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
 def plugin_tags(engine: YakEngine) -> dict:
     """获取插件标签列表"""
     stub = engine.connect()
@@ -1412,3 +1679,211 @@ def ping_webshell(engine: YakEngine, webshell_id: int) -> dict:
         }
     except Exception as e:
         return {"ok": False, "reason": repr(e)}
+
+
+# ---------------------------------------------------------------------------
+# 高级能力: CSRF POC 生成 / 流量导出 / 字典管理 / WebShell 管理 / 反连监听
+# ---------------------------------------------------------------------------
+def generate_csrf_poc(engine: YakEngine, packet: str, is_https: bool = False) -> dict:
+    """从请求包生成 CSRF POC HTML（GenerateCSRFPocByPacket）"""
+    stub = engine.connect()
+    try:
+        req = ypb.GenerateCSRFPocByPacketRequest()
+        req.Request = packet.encode("utf-8")
+        req.IsHttps = is_https
+        resp = stub.GenerateCSRFPocByPacket(req)
+        return {"ok": True, "code": (resp.Code or b"").decode("utf-8", errors="replace")}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def export_http_flows(engine: YakEngine, keyword: str = "", limit: int = 100,
+                      source_type: str = "", field_name: str = "url") -> dict:
+    """导出 HTTP 流量（ExportHTTPFlows）—— 取证/协作用"""
+    stub = engine.connect()
+    try:
+        where = ypb.QueryHTTPFlowRequest()
+        if keyword:
+            where.Keyword = keyword
+            where.IncludeInUrl.append(keyword)
+        if source_type:
+            where.SourceType = source_type
+        where.Pagination.Limit = limit
+        req = ypb.ExportHTTPFlowsRequest()
+        req.ExportWhere.CopyFrom(where)
+        if field_name:
+            req.FieldName.append(field_name)
+        resp = stub.ExportHTTPFlows(req)
+        flows = []
+        for f in resp.Data or []:
+            flows.append({
+                "id": f.Id,
+                "method": f.Method,
+                "url": f.Url,
+                "status_code": f.StatusCode,
+                "content_type": f.ContentType,
+                "body_length": f.BodyLength,
+                "request": (f.Request or "")[:500],
+                "response": (f.Response or "")[:500],
+            })
+        return {"ok": True, "total": len(flows), "flows": flows[:100]}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def query_payload(engine: YakEngine, group: str, folder: str = "",
+                  keyword: str = "", limit: int = 200) -> dict:
+    """查询字典内容（QueryPayload，数据库存储）"""
+    stub = engine.connect()
+    try:
+        req = ypb.QueryPayloadRequest()
+        req.Group = group
+        if folder:
+            req.Folder = folder
+        if keyword:
+            req.Keyword = keyword
+        req.Pagination.Limit = limit
+        resp = stub.QueryPayload(req)
+        lines = []
+        for p in resp.Data or []:
+            content = (p.ContentBytes or b"").decode("utf-8", errors="replace")
+            lines.extend([l for l in content.splitlines() if l.strip()])
+        return {"ok": True, "group": group, "total": len(lines), "payloads": lines[:200]}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def save_payload(engine: YakEngine, group: str, content: str,
+                 folder: str = "", is_new: bool = False) -> dict:
+    """保存字典（SavePayloadStream，实测可用）"""
+    stub = engine.connect()
+    try:
+        req = ypb.SavePayloadRequest()
+        req.Group = group
+        req.Content = content
+        req.IsNew = is_new
+        if folder:
+            req.Folder = folder
+        results = []
+        for resp in stub.SavePayloadStream(req, timeout=60):
+            msg = resp.Message
+            if isinstance(msg, bytes):
+                msg = msg.decode("utf-8", errors="replace")
+            if msg:
+                results.append(str(msg)[:200])
+        return {"ok": True, "group": group, "progress": results[:10]}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def create_webshell(engine: YakEngine, url: str, password: str,
+                    shell_type: str = "php", tag: str = "",
+                    remark: str = "", proxy: str = "") -> dict:
+    """创建 WebShell 记录（CreateWebShell）"""
+    stub = engine.connect()
+    try:
+        req = ypb.WebShell()
+        req.Url = url
+        req.Pass = password
+        req.ShellType = shell_type
+        if tag:
+            req.Tag = tag
+        if remark:
+            req.Remark = remark
+        if proxy:
+            req.Proxy = proxy
+        resp = stub.CreateWebShell(req)
+        return {"ok": True, "id": resp.Id, "url": resp.Url, "status": bool(resp.Status)}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def webshell_basic_info(engine: YakEngine, webshell_id: int) -> dict:
+    """获取 WebShell 系统信息（GetBasicInfo，按 id）"""
+    stub = engine.connect()
+    try:
+        req = ypb.WebShellRequest()
+        req.Id = webshell_id
+        resp = stub.GetBasicInfo(req)
+        return {"ok": True, "id": webshell_id, "state": bool(resp.State),
+                "data": (resp.Data or b"").decode("utf-8", errors="replace")[:2000]}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def generate_webshell(engine: YakEngine, shell_type: str = "php",
+                      passwd: str = "cmd", confuse: bool = False,
+                      enc_mode: str = "base64", is_session: bool = False) -> dict:
+    """生成 WebShell 脚本（GenerateWebShell，免杀混淆）"""
+    stub = engine.connect()
+    try:
+        req = ypb.ShellGenerate()
+        # enc_mode 枚举: raw/base64/aes_raw/aes_base64
+        enc_map = {"raw": 0, "base64": 1, "aes_raw": 2, "aes_base64": 3}
+        req.EncMode = enc_map.get(enc_mode, 1)
+        # script 枚举: jsp=0/jspx=1/asp=2/aspx=3/php=4
+        script_map = {"jsp": 0, "jspx": 1, "asp": 2, "aspx": 3, "php": 4}
+        req.Script = script_map.get(shell_type, 4)
+        req.Pass = passwd
+        req.Confuse = confuse
+        req.IsSession = is_session
+        resp = stub.GenerateWebShell(req)
+        return {"ok": True, "shell_type": shell_type,
+                "script": (resp.Data or b"").decode("utf-8", errors="replace")[:5000]}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def config_global_reverse(engine: YakEngine, tunnel_addr: str = "",
+                          tunnel_secret: str = "", local_addr: str = "") -> dict:
+    """
+    配置全局反连服务器（ConfigGlobalReverse）。
+    tunnel_addr: 隧道服务器地址（必填，如 "1.2.3.4:8088"，引擎会连接验证）
+    tunnel_secret: 隧道密码（可选）
+    local_addr: 本地监听地址（可选，如 "0.0.0.0:8088"）
+    """
+    stub = engine.connect()
+    try:
+        if not tunnel_addr:
+            return {"ok": False, "reason": "tunnel_addr 必填（引擎会连接该隧道验证）"}
+        req = ypb.ConfigGlobalReverseParams()
+        req.ConnectParams.Addr = tunnel_addr
+        if tunnel_secret:
+            req.ConnectParams.Secret = tunnel_secret
+        if local_addr:
+            req.LocalAddr = local_addr
+        for _ in stub.ConfigGlobalReverse(req, timeout=10):
+            pass
+        return {"ok": True, "configured": True, "tunnel_addr": tunnel_addr}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+# ---------------------------------------------------------------------------
+# 错误信息人话化
+# ---------------------------------------------------------------------------
+_COMMON_ERRORS = [
+    ("UNAUTHENTICATED", "引擎认证失败：请确认 Yakit GUI 在运行（或引擎密码已更新）"),
+    ("database is closed", "数据库被占用：Yakit GUI 正在使用引擎，请复用 GUI 引擎（不要起第二个）"),
+    ("cannot fetch yak script", "插件不存在或已被移除，请先用 yakit_query_plugins 查询插件名"),
+    ("target is empty", "缺少 target 参数：请传目标地址（host 或 URL）"),
+    ("panic caught", "引擎内部错误（yak 引擎 bug）：可尝试重启 Yakit 或换目标"),
+    ("connect failed", "无法连接目标：网络不通或目标拒绝连接"),
+    ("connection refused", "目标拒绝连接（端口未开放）"),
+    ("timeout", "操作超时：目标响应慢或网络延迟高"),
+    ("generate command failed", "反弹 shell 生成失败（引擎模板为空）：已用内置模板兜底"),
+    ("impl me", "该接口当前引擎版本未实现（yak 1.4.4 限制）"),
+    ("unimplemented", "接口未实现或方法名错误：请检查参数"),
+    ("params is empty", "参数不完整：缺少必填字段"),
+    ("empty addr", "地址为空：请提供有效的 host:port 地址"),
+]
+
+
+def humanize_error(raw: str) -> str:
+    """把引擎原始错误转成人话"""
+    if not raw:
+        return ""
+    for pat, msg in _COMMON_ERRORS:
+        if pat.lower() in str(raw).lower():
+            return msg
+    return str(raw)[:300]

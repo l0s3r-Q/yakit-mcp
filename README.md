@@ -14,7 +14,7 @@
 - [背景与动机](#背景与动机)
 - [功能总览](#功能总览)
 - [快速开始](#快速开始)
-- [工具清单](#工具清单-43-个)
+- [工具清单](#工具清单-58-个)
 - [协议识别与双试探](#协议识别与双试探)
 - [完整链路工作流](#完整链路工作流)
 - [截图方案](#截图方案)
@@ -94,7 +94,7 @@ yakit_replay(
 )
 ```
 
-## 工具清单（43 个）
+## 工具清单（58 个）
 
 ### 核心重放与流量
 
@@ -181,6 +181,30 @@ yakit_replay(
 | `yakit_reverse_shell_programs()` | 反弹 shell 程序列表 |
 | `yakit_webshell_query(tag, limit)` | WebShell 列表查询 |
 | `yakit_webshell_ping(id)` | Ping WebShell（按 id） |
+| `yakit_webshell_create(url, pass, shell_type)` | 创建 WebShell 记录 |
+| `yakit_webshell_info(id)` | 获取 WebShell 系统信息 |
+| `yakit_webshell_generate(shell_type, passwd, confuse)` | 生成 WebShell 脚本（引擎 1.4.4 未实现时返回原因） |
+
+### 异步任务与场景组合
+
+| 工具 | 说明 |
+|------|------|
+| `yakit_scan_start(task_type, targets, ...)` | 启动后台扫描（立即返回 task_id，不阻塞） |
+| `yakit_task_status(task_id)` | 查询任务进度 + 已收集结果 |
+| `yakit_task_wait(task_id, timeout)` | 等待任务完成 |
+| `yakit_task_list()` | 列出所有后台任务 |
+| `yakit_quick_scan(target, ports)` | 一键扫描：端口扫描 + 指纹 + 资产查询 |
+
+### 高级能力
+
+| 工具 | 说明 |
+|------|------|
+| `yakit_exec_script(code, ...)` | 通用 Yak 脚本执行（Yak Runner 等价） |
+| `yakit_exec_batch_packet_plugin(scripts, packet)` | 单包多插件批量扫描 |
+| `yakit_generate_csrf_poc(packet)` | 从请求包生成 CSRF POC HTML |
+| `yakit_export_flows(keyword, limit)` | 导出 HTTP 流量（含请求/响应） |
+| `yakit_payload_query(group)` / `yakit_payload_save(group, content)` | 字典管理（数据库） |
+| `yakit_reverse_configure(tunnel_addr)` | 配置反连服务器（隧道模式） |
 
 ## 协议识别与双试探
 
@@ -253,7 +277,7 @@ yakit-mcp/
 ├── protos/
 │   └── grpc.proto        # Yakit gRPC 协议定义（从 app.asar 提取）
 ├── yakit_mcp/
-│   ├── server.py         # 入口 + 43 个 MCP 工具
+│   ├── server.py         # 入口 + 58 个 MCP 工具
 │   ├── engine.py         # 引擎管理/认证/重放/协议识别/历史管理
 │   ├── cdp.py            # CDP 控制 GUI（send-to-tab/填包/发送/截图）
 │   ├── capture.py        # PrintWindow 窗口截图

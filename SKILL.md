@@ -156,3 +156,19 @@ Agent: yakit_replay(packet="...", is_https=True, capture=True)
 - 真源: `%WORKSPACE%\yakit-mcp\`
 - 引擎: Yakit 安装目录 `%YAKIT_DIR%\bins\yak.zip`（自动解压到 `%LOCALAPPDATA%\yakit-mcp\engine\`）
 - proto: 从 Yakit GUI `app.asar` 提取（`protos/grpc.proto`）
+
+## 高级能力（v0.3+ 新增 15 工具）
+
+- **异步任务**: `yakit_scan_start`（后台扫描立即返回）→ `yakit_task_status` / `yakit_task_wait` / `yakit_task_list`
+- **一键扫描**: `yakit_quick_scan(target)`（端口扫描+指纹+资产自动带出）
+- **通用执行**: `yakit_exec_script(code)`（Yak Runner 等价，Agent 可写任意 Yak 代码）
+- **批量插件**: `yakit_exec_batch_packet_plugin("插件A,插件B", packet)`（单包多插件）
+- **CSRF**: `yakit_generate_csrf_poc(packet)` 生成 POC HTML
+- **取证**: `yakit_export_flows(keyword)` 导出流量（含请求/响应）
+- **字典**: `yakit_payload_save(group, content)` / `yakit_payload_query(group)`
+- **WebShell**: `yakit_webshell_create/info/generate`
+- **反连**: `yakit_reverse_configure(tunnel_addr)`
+
+## 错误信息人话化
+
+引擎原始错误（UNAUTHENTICATED/panic 等）会自动翻译为可读提示（`reason_human` 字段）。
