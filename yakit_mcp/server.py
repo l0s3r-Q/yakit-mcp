@@ -726,15 +726,17 @@ def yakit_query_risks(keyword: str = "", limit: int = 50, severity: str = "") ->
 # 编码与反连工具
 # ---------------------------------------------------------------------------
 @mcp.tool()
-def yakit_codec(text: str, codec_type: str = "base64-encode") -> str:
+def yakit_codec(text: str, codec_type: str = "Base64Encode",
+                params: str = "{}") -> str:
     """
     编解码（Yakit Codec 引擎）。
     参数:
       text: 要编解码的内容
-      codec_type: 方法（base64-encode/base64-decode/url-encode/url-decode/hex/md5/... 用 yakit_codec_methods 查）
+      codec_type: 方法（Base64Encode/Base64Decode/UrlEncode/SHA1/MD5... 用 yakit_codec_methods 查）
+      params: 可选参数 JSON（默认自动填充方法默认值）
     """
     engine = get_engine()
-    r = codec(engine, text, codec_type)
+    r = codec(engine, text, codec_type, params)
     return json.dumps(r, ensure_ascii=False, indent=2)
 
 

