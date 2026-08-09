@@ -327,6 +327,60 @@ def cdp_fill_and_send(port: int = CDP_PORT_DEFAULT, packet: str = "", force_http
         return {"ok": False, "reason": repr(e)}
 
 
+def cdp_click_send_and_wait(port: int = CDP_PORT_DEFAULT, wait_seconds: int = 8) -> dict:
+    """
+    通过 CDP 点击 Web Fuzzer 页面【可见的】"发送请求"按钮，等待响应。
+    （过滤隐藏按钮——多 tab 页面有多个发送按钮，只有当前活动 tab 的可见）
+    返回: {ok, clicked, response_found}
+    """
+    if not cdp_ready(port, timeout=3):
+        return {"ok": False, "reason": "CDP 不可用"}
+    main = _find_main_page(port)
+    if not main:
+        return {"ok": False, "reason": "无主页面"}
+    websocket = _load_websocket()
+    ws = websocket.create_connection(main["webSocketDebuggerUrl"], timeout=15)
+    msg_id = [0]
+    try:
+        _rpc(ws, "Runtime.enable", {}, msg_id)
+        clicked = _eval(ws, """(() => {
+            const all = [...document.querySelectorAll('button')];
+            const t = all.find(e => {
+                const r = e.getBoundingClientRect();
+                const t2 = e.textContent.trim();
+                return t2.startsWith('发送请求') && !t2.startsWith('暂停')
+                    && r.width > 0 && r.top > 0 && r.top < 900;
+            });
+            if (t) { t.click(); return 'clicked:' + t.textContent.trim(); }
+            return 'nf';
+        })()""", msg_id)
+        time.sleep(wait_seconds)
+        # 切"响应"tab（如果存在）
+        _eval(ws, """(() => {
+            const all = [...document.querySelectorAll('*')].filter(e => e.children.length === 0);
+            const cand = all.find(e => {
+                const t = e.textContent.trim();
+                return (t === '响应' || t === 'Response' || t === '原文') && e.offsetParent !== null;
+            });
+            if (cand) { cand.click(); return 'ok'; }
+            return 'nf';
+        })()""", msg_id)
+        time.sleep(1.5)
+        # 检测响应
+        resp = _eval(ws, """(() => {
+            const t = document.body.innerText;
+            return t.includes('HTTP/1.1') || t.includes('HTTP/2') ? 'yes' : 'no';
+        })()""", msg_id)
+        ws.close()
+        return {"ok": True, "clicked": str(clicked), "response_found": str(resp) == 'yes'}
+    except Exception as e:
+        try:
+            ws.close()
+        except Exception:
+            pass
+        return {"ok": False, "reason": repr(e)}
+
+
 def cdp_send_to_tab(port: int = CDP_PORT_DEFAULT, packet: str = "", is_https: bool = False, open_flag: bool = True) -> dict:
     """
     【终极方案】通过 CDP 在 Yakit 渲染进程执行 ipcRenderer.invoke('send-to-tab')，

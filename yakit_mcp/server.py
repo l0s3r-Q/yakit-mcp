@@ -25,6 +25,7 @@ from mcp.server.fastmcp import FastMCP
 from . import grpc_pb2 as ypb
 from .capture import capture_window, capture_window_clean
 from .cdp import (
+    cdp_click_send_and_wait,
     cdp_close_webfuzzer_tab,
     cdp_fill_and_send,
     cdp_new_webfuzzer_tab,
@@ -248,16 +249,21 @@ def yakit_replay(
             except Exception:
                 result["send_to_tab"] = {"ok": False}
         time.sleep(2)
-        # 1) CDP 全自动: 打开 Web Fuzzer 页面 + 页面级截图
+        # 1) CDP 全自动: 打开 Web Fuzzer 页面 + 点击可见发送按钮等待响应 + 页面级截图
         if cdp_ready(9333, timeout=2):
             from .engine import find_yakit_gui
             gui = find_yakit_gui() or ""
             ow = open_webfuzzer(gui_path=gui)
             time.sleep(1)
+            # 点【可见】发送按钮 + 等响应 + 切响应tab
+            send_r = cdp_click_send_and_wait(9333, wait_seconds=6)
+            result["send_click"] = send_r
+            time.sleep(1)
             cap = cdp_screenshot(9333, output_dir=out_dir)
             if cap.get("ok"):
                 cap["webfuzzer_opened"] = ow.get("clicked", "")
-                cap["push_tab_ok"] = result["push_tab"]
+                cap["send_clicked"] = send_r.get("clicked", "")
+                cap["response_found"] = send_r.get("response_found", False)
                 result["capture"] = cap
                 return json.dumps(result, ensure_ascii=False, indent=2, default=str)
         # 2) PrintWindow 窗口截图（无视遮挡）
