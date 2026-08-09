@@ -17,14 +17,16 @@ import os
 import sys
 from pathlib import Path
 
-# 让 grpc_pb2 可导入
-sys.path.insert(0, str(Path(__file__).parent))
-
+# 让 yakit_mcp 包可导入（兼容: python -m yakit_mcp.server 和 python server.py 两种启动）
+_PKG_DIR = str(Path(__file__).parent)          # .../yakit_mcp/
+_PARENT_DIR = str(Path(__file__).parent.parent)  # .../yakit-mcp/
+for _p in (_PKG_DIR, _PARENT_DIR):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+import yakit_mcp.grpc_pb2 as ypb
 from mcp.server.fastmcp import FastMCP
-
-from . import grpc_pb2 as ypb
-from .capture import capture_window, capture_window_clean
-from .cdp import (
+from yakit_mcp.capture import capture_window, capture_window_clean
+from yakit_mcp.cdp import (
     cdp_click_send_and_wait,
     cdp_close_webfuzzer_tab,
     cdp_fill_and_send,
@@ -36,7 +38,7 @@ from .cdp import (
     launch_gui_with_cdp,
     open_webfuzzer,
 )
-from .engine import (
+from yakit_mcp.engine import (
     DEFAULT_HOST,
     DEFAULT_PORT,
     YakEngine,
