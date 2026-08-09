@@ -209,8 +209,8 @@ def cdp_new_webfuzzer_tab(port: int = CDP_PORT_DEFAULT) -> dict:
 
 def cdp_close_webfuzzer_tab(port: int = CDP_PORT_DEFAULT, tab_text: str = "") -> dict:
     """
-    通过 CDP 关闭 Web Fuzzer tab（官方 IPC 通道 send-close-tab），防止窗口增多卡顿。
-    源码: HTTPFuzzerPage.tsx send-close-tab → communication.js → fetch-close-tab → removeMenuPage
+    通过 CDP 关闭 Web Fuzzer tab（右键菜单"关闭当前标签页"，实测成功），防止窗口增多卡顿。
+    流程: 数字 tab 上触发 contextmenu → 点击"关闭当前标签页"菜单项。
     返回: {ok, closed, reason}
     """
     if not cdp_ready(port, timeout=3):
@@ -223,17 +223,27 @@ def cdp_close_webfuzzer_tab(port: int = CDP_PORT_DEFAULT, tab_text: str = "") ->
     msg_id = [0]
     try:
         _rpc(ws, "Runtime.enable", {}, msg_id)
-        # 官方通道: ipcRenderer.invoke('send-close-tab', {router: 'HTTPFuzzer'})
-        result = _eval(ws, """(async () => {
-            try {
-                const ipc = window.require('electron').ipcRenderer;
-                await ipc.invoke('send-close-tab', {router: 'HTTPFuzzer', name: 'Web Fuzzer'});
-                return 'ok';
-            } catch(e) { return 'ERR:' + e.message; }
+        # 方式1（实测成功）: 数字 tab 上触发右键菜单 → 点"关闭当前标签页"
+        result = _eval(ws, """(() => {
+            const items = [...document.querySelectorAll('[class*=tab-menu-sub-item]')];
+            const last = items.filter(e => /^\\d+$/.test(e.textContent.trim())).pop();
+            if (!last) return 'no tab';
+            const rect = last.getBoundingClientRect();
+            const evt = new MouseEvent('contextmenu', {bubbles: true, cancelable: true, clientX: rect.x + 10, clientY: rect.y + 10});
+            last.dispatchEvent(evt);
+            return 'contextmenu dispatched';
         })()""", msg_id)
-        time.sleep(1.5)
+        time.sleep(1)
+        # 点"关闭当前标签页"
+        closed = _eval(ws, """(() => {
+            const all = [...document.querySelectorAll('*')].filter(e => e.children.length === 0);
+            const c = all.find(e => /关闭当前标签页|关闭当前/.test(e.textContent.trim()) && e.offsetParent !== null);
+            if (c) { c.click(); return 'clicked close-current'; }
+            return 'no menu item';
+        })()""", msg_id)
+        time.sleep(2)
         ws.close()
-        return {"ok": str(result) == "ok", "closed": str(result)}
+        return {"ok": 'close-current' in str(closed), "closed": str(closed), "contextmenu": str(result)}
     except Exception as e:
         try:
             ws.close()
