@@ -172,3 +172,10 @@ Agent: yakit_replay(packet="...", is_https=True, capture=True)
 ## 错误信息人话化
 
 引擎原始错误（UNAUTHENTICATED/panic 等）会自动翻译为可读提示（`reason_human` 字段）。
+
+## 内网渗透与 WAF（v0.4 新增 4 工具）
+
+- **端口转发/反连监听**: `yakit_facade_start(local_port, tunnel_addr)`（本地监听转发，实测 LISTENING）
+- **YSO 反序列化回连**: `yakit_facade_yso(reverse_port, gadget, class_name)`（实测 8090 LISTENING）
+- **停止监听**: `yakit_facade_stop(task_id)`
+- **WAF 识别**: `yakit_waf_detect(url)`（30+ 指纹：Cloudflare/安全狗/360/加速乐/阿里云盾/腾讯云/AWS，实测命中）
