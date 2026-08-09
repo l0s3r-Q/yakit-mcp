@@ -72,7 +72,9 @@ from yakit_mcp.engine import (
     query_plugins,
     query_ports,
     query_risks,
+    query_webshells,
     replay_packet,
+    reverse_server,
     reverse_shell,
     reverse_shell_programs,
     save_fuzzer_label,
@@ -849,6 +851,33 @@ def yakit_yso_gadgets() -> str:
     """获取可用的 YSO gadget 列表。"""
     engine = get_engine()
     r = yso_gadgets(engine)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# 反连与 WebShell 管理
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def yakit_reverse_server() -> str:
+    """获取全局反连服务器信息（公网 IP/端口/本地地址）—— 反弹连接/探测用。"""
+    engine = get_engine()
+    r = reverse_server(engine)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_webshell_query(tag: str = "", limit: int = 50) -> str:
+    """查询已保存的 WebShell 列表（可按 tag 过滤）。"""
+    engine = get_engine()
+    r = query_webshells(engine, tag, limit)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_webshell_ping(webshell_id: int) -> str:
+    """Ping WebShell（按 id 验证连通性，返回系统信息）。"""
+    engine = get_engine()
+    r = ping_webshell(engine, webshell_id)
     return json.dumps(r, ensure_ascii=False, indent=2)
 
 

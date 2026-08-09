@@ -1301,3 +1301,62 @@ def yso_gadgets(engine: YakEngine) -> dict:
         return {"ok": True, "gadgets": [o.Name for o in (resp.Options or []) if o.Name]}
     except Exception as e:
         return {"ok": False, "reason": repr(e)}
+
+
+def reverse_server(engine: YakEngine) -> dict:
+    """获取全局反连服务器信息（GetGlobalReverseServer）—— 反弹连接/探测用"""
+    stub = engine.connect()
+    try:
+        resp = stub.GetGlobalReverseServer(ypb.Empty())
+        return {
+            "ok": True,
+            "public_ip": resp.PublicReverseIP or "",
+            "public_port": resp.PublicReversePort,
+            "local_addr": resp.LocalReverseAddr or "",
+            "local_port": resp.LocalReversePort,
+        }
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def query_webshells(engine: YakEngine, tag: str = "", limit: int = 50) -> dict:
+    """查询已保存的 WebShell（QueryWebShells），可按 tag 过滤"""
+    stub = engine.connect()
+    try:
+        req = ypb.QueryWebShellsRequest()
+        req.Pagination.Limit = limit
+        req.Pagination.Page = 1
+        if tag:
+            req.Tag = tag
+        resp = stub.QueryWebShells(req)
+        shells = []
+        for w in (resp.Data or []):
+            shells.append({
+                "id": w.Id,
+                "url": w.Url or "",
+                "pass": w.Pass or "",
+                "shell_type": w.ShellType or "",
+                "status": bool(w.Status),
+                "tag": w.Tag or "",
+                "remark": w.Remark or "",
+            })
+        return {"ok": True, "total": resp.Total, "webshells": shells}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def ping_webshell(engine: YakEngine, webshell_id: int) -> dict:
+    """Ping WebShell（按 id 验证连通性，返回系统信息）"""
+    stub = engine.connect()
+    try:
+        req = ypb.WebShellRequest()
+        req.Id = webshell_id
+        resp = stub.Ping(req)
+        return {
+            "ok": True,
+            "id": webshell_id,
+            "state": bool(resp.State),
+            "data": (resp.Data or b"").decode("utf-8", errors="replace")[:2000],
+        }
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
