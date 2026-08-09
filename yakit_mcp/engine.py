@@ -728,3 +728,264 @@ def query_mitm_flows(engine: YakEngine, after_id: int = 0, limit: int = 50,
         return {"ok": True, "total": resp.Total, "flows": flows}
     except Exception as e:
         return {"ok": False, "reason": repr(e)}
+
+
+# ---------------------------------------------------------------------------
+# 主动扫描: 端口扫描 / 漏洞检测 / 弱口令爆破 / 爬虫
+# ---------------------------------------------------------------------------
+def port_scan(engine: YakEngine, targets: str, ports: str = "80,443,8080",
+              mode: str = "tcp", concurrent: int = 100, fingerprint_mode: str = "all") -> dict:
+    """
+    端口扫描（PortScan）。
+    参数: targets(如 1.1.1.1 或 1.1.1.0/24), ports(如 80,443,1-1000), mode(tcp/syn), fingerprint_mode(all/service/web)
+    返回: 扫描结果流（发现的端口/服务/指纹）
+    """
+    stub = engine.connect()
+    try:
+        req = ypb.PortScanRequest()
+        req.Targets = targets
+        req.Ports = ports
+        req.Mode = mode
+        req.Concurrent = concurrent
+        req.FingerprintMode = fingerprint_mode
+        req.SaveToDB = True
+        results = []
+        for resp in stub.PortScan(req, timeout=300):
+            text = resp.Message or resp.Raw or b""
+            if text:
+                results.append(text.decode("utf-8", errors="replace") if isinstance(text, bytes) else text)
+        # 解析 JSON 流（Yakit 扫描结果: {"type":"log"/"progress", "content":{...}}）
+        parsed = []
+        for line in results:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                ctype = obj.get("type", "")
+                content = obj.get("content", {})
+                if isinstance(content, dict):
+                    level = content.get("level", "")
+                    data = content.get("data", "")
+                    # 提取有用信息（跳过纯状态卡）
+                    if data and "feature-status" not in level and ctype != "progress":
+                        try:
+                            inner = json.loads(data)
+                            parsed.append({"type": ctype, "level": level, "data": inner})
+                        except Exception:
+                            parsed.append({"type": ctype, "level": level, "data": data[:300]})
+            except Exception:
+                if "feature-status" not in line:
+                    parsed.append({"raw": line[:300]})
+        return {"ok": True, "targets": targets, "ports": ports,
+                "total_events": len(results), "parsed": parsed[:60]}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def simple_detect(engine: YakEngine, targets: str, ports: str = "80,443",
+                  concurrent: int = 100, total_timeout: int = 600) -> dict:
+    """
+    漏洞检测（SimpleDetect，基于 nuclei 引擎 + Yakit 插件）。
+    参数: targets(目标), ports(端口), concurrent(并发), total_timeout(总超时秒)
+    返回: 检测结果流（发现的漏洞/指纹）
+    """
+    stub = engine.connect()
+    try:
+        # SimpleDetect 基于 PortScan + 漏洞插件
+        scan = ypb.PortScanRequest()
+        scan.Targets = targets
+        scan.Ports = ports
+        scan.Mode = "tcp"
+        scan.Concurrent = concurrent
+        scan.SaveToDB = True
+        record = ypb.RecordPortScanRequest()
+        record.PortScanRequest.CopyFrom(scan)
+        results = []
+        for resp in stub.SimpleDetect(record, timeout=total_timeout + 30):
+            text = resp.Message or resp.Raw or b""
+            if text:
+                results.append(text)
+        return {"ok": True, "targets": targets, "results": results[:200]}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def start_brute(engine: YakEngine, targets: str, service_type: str = "ssh",
+                username: str = "", password: str = "",
+                username_file: str = "", password_file: str = "",
+                concurrent: int = 20) -> dict:
+    """
+    弱口令爆破（StartBrute）。
+    参数:
+      targets: 目标(host:port)
+      service_type: 服务类型(ssh/mysql/redis/... 用 yakit_brute_types 查)
+      username/password: 单账号密码
+      username_file/password_file: 字典文件路径
+    """
+    stub = engine.connect()
+    try:
+        req = ypb.StartBruteParams()
+        req.Target = targets
+        req.BruteType = service_type
+        req.Concurrent = concurrent
+        if username:
+            req.Username = username
+        if password:
+            req.Password = password
+        if username_file:
+            req.UsernameFile = username_file
+        if password_file:
+            req.PasswordFile = password_file
+        results = []
+        for resp in stub.StartBrute(req, timeout=300):
+            text = resp.Message or resp.Raw or b""
+            if text:
+                results.append(text)
+        return {"ok": True, "target": targets, "type": service_type, "results": results[:100]}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def brute_types(engine: YakEngine) -> dict:
+    """获取可用的爆破服务类型"""
+    stub = engine.connect()
+    try:
+        resp = stub.GetAvailableBruteTypes(ypb.Empty())
+        return {"ok": True, "types": list(resp.Types or [])}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def basic_crawler(engine: YakEngine, target: str, max_depth: int = 2,
+                  max_urls: int = 100, concurrent: int = 10) -> dict:
+    """
+    基础爬虫（StartBasicCrawler）。
+    参数: target(起始URL), max_depth(深度), max_urls(最大URL数)
+    返回: 爬取结果（发现的 URL）
+    """
+    stub = engine.connect()
+    try:
+        req = ypb.StartBasicCrawlerRequest()
+        req.Target = target
+        req.MaxDepth = max_depth
+        req.MaxUrls = max_urls
+        req.Concurrent = concurrent
+        resp = stub.StartBasicCrawler(req, timeout=300)
+        return {"ok": True, "result": resp.Raw or resp.Message or ""}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+# ---------------------------------------------------------------------------
+# 资产查询: 端口 / 主机 / 域名 / 风险
+# ---------------------------------------------------------------------------
+def query_ports(engine: YakEngine, keyword: str = "", limit: int = 50,
+                hosts: str = "", ports: str = "") -> dict:
+    """查询端口资产（扫描结果入库后从这里取）"""
+    stub = engine.connect()
+    try:
+        req = ypb.QueryPortsRequest()
+        req.Pagination.Limit = limit
+        req.Pagination.Page = 1
+        if keyword:
+            req.Keywords = keyword
+        if hosts:
+            req.Hosts = hosts
+        if ports:
+            req.Ports = ports
+        resp = stub.QueryPorts(req)
+        items = []
+        for p in resp.Data or []:
+            items.append({
+                "id": p.Id,
+                "host": p.Host,
+                "port": p.Port,
+                "service": p.Service,
+                "state": p.State,
+                "title": p.Title,
+                "proto": p.Proto,
+                "fingerprint": p.Fingerprint,
+                "updated_at": p.UpdatedAt,
+            })
+        return {"ok": True, "total": resp.Total, "ports": items}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def query_hosts(engine: YakEngine, keyword: str = "", limit: int = 50) -> dict:
+    """查询主机资产"""
+    stub = engine.connect()
+    try:
+        req = ypb.QueryHostsRequest()
+        req.Pagination.Limit = limit
+        req.Pagination.Page = 1
+        if keyword:
+            req.Keywords = keyword
+        resp = stub.QueryHosts(req)
+        items = []
+        for h in resp.Data or []:
+            items.append({
+                "id": h.Id,
+                "ip": h.IP,
+                "domain": h.Domain,
+                "is_public": h.IsInPublicNet,
+                "ports_count": h.Ports,
+                "updated_at": h.UpdatedAt,
+            })
+        return {"ok": True, "total": resp.Total, "hosts": items}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def query_domains(engine: YakEngine, keyword: str = "", limit: int = 50) -> dict:
+    """查询域名资产"""
+    stub = engine.connect()
+    try:
+        req = ypb.QueryDomainsRequest()
+        req.Pagination.Limit = limit
+        req.Pagination.Page = 1
+        if keyword:
+            req.Keywords = keyword
+        resp = stub.QueryDomains(req)
+        items = []
+        for d in resp.Data or []:
+            items.append({
+                "id": d.Id,
+                "domain": d.Domain,
+                "ip": d.IP,
+                "updated_at": d.UpdatedAt,
+            })
+        return {"ok": True, "total": resp.Total, "domains": items}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def query_risks(engine: YakEngine, keyword: str = "", limit: int = 50,
+                severity: str = "") -> dict:
+    """查询漏洞/风险记录"""
+    stub = engine.connect()
+    try:
+        req = ypb.QueryRisksRequest()
+        req.Pagination.Limit = limit
+        req.Pagination.Page = 1
+        if keyword:
+            req.Keywords = keyword
+        if severity:
+            req.Level = severity
+        resp = stub.QueryRisks(req)
+        items = []
+        for r in resp.Data or []:
+            items.append({
+                "id": r.Id,
+                "risk_type": r.RiskType,
+                "url": r.Url,
+                "title": r.Title,
+                "severity": r.Severity,
+                "description": (r.Description or "")[:300],
+                "target": r.IP or r.Host,
+                "updated_at": r.UpdatedAt,
+            })
+        return {"ok": True, "total": resp.Total, "risks": items}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}

@@ -42,6 +42,8 @@ from yakit_mcp.engine import (
     DEFAULT_HOST,
     DEFAULT_PORT,
     YakEngine,
+    basic_crawler,
+    brute_types,
     clear_fuzzer_history,
     delete_fuzzer_label,
     find_yakit_engine,
@@ -52,11 +54,18 @@ from yakit_mcp.engine import (
     mitm_status,
     mitm_stop,
     parse_http_packet,
+    port_scan,
     push_webfuzzer_tab,
+    query_domains,
     query_http_flows,
+    query_hosts,
     query_mitm_flows,
+    query_ports,
+    query_risks,
     replay_packet,
     save_fuzzer_label,
+    simple_detect,
+    start_brute,
 )
 
 mcp = FastMCP("yakit-mcp")
@@ -567,6 +576,133 @@ def yakit_mitm_flows(after_id: int = 0, limit: int = 50, keyword: str = "") -> s
     """
     engine = get_engine()
     r = query_mitm_flows(engine, after_id=after_id, limit=limit, keyword=keyword)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# 主动扫描: 端口扫描 / 漏洞检测 / 爆破 / 爬虫
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def yakit_port_scan(targets: str, ports: str = "80,443,8080",
+                    mode: str = "tcp", concurrent: int = 100,
+                    fingerprint_mode: str = "all") -> str:
+    """
+    端口扫描（Yakit PortScan 引擎）。
+    参数:
+      targets: 目标（如 1.2.3.4 或 1.2.3.0/24 或 domain.com）
+      ports: 端口范围（如 80,443,1-1000）
+      mode: 扫描模式 tcp/syn（默认 tcp）
+      concurrent: 并发数（默认 100）
+      fingerprint_mode: 指纹识别 all/service/web（默认 all）
+    返回: 扫描结果（发现端口/服务/指纹）
+    """
+    engine = get_engine()
+    r = port_scan(engine, targets, ports, mode, concurrent, fingerprint_mode)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_simple_detect(targets: str, ports: str = "80,443",
+                        concurrent: int = 100, total_timeout: int = 600) -> str:
+    """
+    漏洞检测（Yakit SimpleDetect，nuclei 引擎 + 插件）。
+    参数:
+      targets: 目标
+      ports: 检测端口
+      concurrent: 并发
+      total_timeout: 总超时秒数
+    返回: 检测结果（发现的漏洞/指纹）
+    """
+    engine = get_engine()
+    r = simple_detect(engine, targets, ports, concurrent, total_timeout)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_start_brute(target: str, service_type: str = "ssh",
+                      username: str = "", password: str = "",
+                      username_file: str = "", password_file: str = "",
+                      concurrent: int = 20) -> str:
+    """
+    弱口令爆破（Yakit StartBrute）。
+    参数:
+      target: 目标（host:port）
+      service_type: 服务类型（ssh/mysql/redis/ftp/... 用 yakit_brute_types 查）
+      username/password: 单账号密码
+      username_file/password_file: 字典文件路径
+      concurrent: 并发数
+    返回: 爆破结果（成功/失败）
+    """
+    engine = get_engine()
+    r = start_brute(engine, target, service_type, username, password,
+                    username_file, password_file, concurrent)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_brute_types() -> str:
+    """获取可用的弱口令爆破服务类型列表。"""
+    engine = get_engine()
+    r = brute_types(engine)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_basic_crawler(target: str, max_depth: int = 2,
+                        max_urls: int = 100, concurrent: int = 10) -> str:
+    """
+    基础爬虫（Yakit StartBasicCrawler），爬取目标站点 URL。
+    参数:
+      target: 起始 URL（如 http://example.com）
+      max_depth: 爬取深度（默认 2）
+      max_urls: 最大 URL 数（默认 100）
+      concurrent: 并发数
+    返回: 爬取结果
+    """
+    engine = get_engine()
+    r = basic_crawler(engine, target, max_depth, max_urls, concurrent)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# 资产与漏洞查询
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def yakit_query_ports(keyword: str = "", limit: int = 50,
+                      hosts: str = "", ports: str = "") -> str:
+    """
+    查询端口资产（端口扫描结果入库后从这里取）。
+    参数: keyword(关键词), hosts(主机过滤), ports(端口过滤), limit
+    """
+    engine = get_engine()
+    r = query_ports(engine, keyword, limit, hosts, ports)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_query_hosts(keyword: str = "", limit: int = 50) -> str:
+    """查询主机资产。参数: keyword, limit"""
+    engine = get_engine()
+    r = query_hosts(engine, keyword, limit)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_query_domains(keyword: str = "", limit: int = 50) -> str:
+    """查询域名资产。参数: keyword, limit"""
+    engine = get_engine()
+    r = query_domains(engine, keyword, limit)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_query_risks(keyword: str = "", limit: int = 50, severity: str = "") -> str:
+    """
+    查询漏洞/风险记录。
+    参数: keyword(关键词), severity(严重级别 high/medium/low), limit
+    """
+    engine = get_engine()
+    r = query_risks(engine, keyword, limit, severity)
     return json.dumps(r, ensure_ascii=False, indent=2)
 
 
