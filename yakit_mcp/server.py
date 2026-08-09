@@ -30,6 +30,7 @@ from .cdp import (
     cdp_new_webfuzzer_tab,
     cdp_ready,
     cdp_screenshot,
+    cdp_send_to_tab,
     cdp_set_https_switch,
     launch_gui_with_cdp,
     open_webfuzzer,
@@ -238,15 +239,14 @@ def yakit_replay(
             import time
             time.sleep(wait_gui_seconds)
         out_dir = capture_output_dir or _default_output_dir()
-        # 0) 官方通道: gRPC 推送新 tab（带请求，源码确认的 MCP 通道，绕开 Monaco）
-        from .engine import push_webfuzzer_tab
-        try:
-            push_r = push_webfuzzer_tab(engine, packet,
-                                        is_https=(result.get("selected_protocol") == "https"),
-                                        tab_name="MCP-重放")
-            result["push_tab"] = push_r.get("ok", False)
-        except Exception:
-            result["push_tab"] = False
+        # 0) CDP send-to-tab 官方前端通道（新开干净 tab + 填请求）
+        if cdp_ready(9333, timeout=2):
+            try:
+                st = cdp_send_to_tab(9333, packet=packet,
+                                     is_https=(result.get("selected_protocol") == "https"))
+                result["send_to_tab"] = st
+            except Exception:
+                result["send_to_tab"] = {"ok": False}
         time.sleep(2)
         # 1) CDP 全自动: 打开 Web Fuzzer 页面 + 页面级截图
         if cdp_ready(9333, timeout=2):

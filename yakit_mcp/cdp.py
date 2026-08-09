@@ -327,6 +327,52 @@ def cdp_fill_and_send(port: int = CDP_PORT_DEFAULT, packet: str = "", force_http
         return {"ok": False, "reason": repr(e)}
 
 
+def cdp_send_to_tab(port: int = CDP_PORT_DEFAULT, packet: str = "", is_https: bool = False, open_flag: bool = True) -> dict:
+    """
+    【终极方案】通过 CDP 在 Yakit 渲染进程执行 ipcRenderer.invoke('send-to-tab')，
+    触发前端官方逻辑新开 Web Fuzzer tab 并填入请求（源码: HTTPFuzzerPage.tsx:710 +
+    communication.js send-to-tab → fetch-send-to-tab → MainOperatorContent addFuzzer）。
+    绕开 Monaco 填包，新 tab 干净无旧内容。
+    """
+    if not cdp_ready(port, timeout=3):
+        return {"ok": False, "reason": "CDP 不可用"}
+    main = _find_main_page(port)
+    if not main:
+        return {"ok": False, "reason": "无主页面"}
+    websocket = _load_websocket()
+    ws = websocket.create_connection(main["webSocketDebuggerUrl"], timeout=15)
+    msg_id = [0]
+    try:
+        _rpc(ws, "Runtime.enable", {}, msg_id)
+        # 构造 JS: 用 window.require('electron').ipcRenderer.invoke('send-to-tab')
+        js_req = json.dumps(packet, ensure_ascii=False)
+        js = f"""(async () => {{
+            const REQ = {js_req};
+            const params = {{type: 'fuzzer', data: {{isHttps: {'true' if is_https else 'false'}, request: REQ, openFlag: {'true' if open_flag else 'false'}}}}};
+            try {{
+                if (window.require) {{
+                    const ipc = window.require('electron').ipcRenderer;
+                    if (ipc && ipc.invoke) {{
+                        await ipc.invoke('send-to-tab', params);
+                        return 'ok';
+                    }}
+                    return 'no-invoke';
+                }}
+                return 'no-require';
+            }} catch (e) {{ return 'ERR: ' + e.message; }}
+        }})()"""
+        result = _eval(ws, js, msg_id)
+        time.sleep(2)
+        ws.close()
+        return {"ok": str(result) == "ok", "result": str(result)}
+    except Exception as e:
+        try:
+            ws.close()
+        except Exception:
+            pass
+        return {"ok": False, "reason": repr(e)}
+
+
 def open_webfuzzer(port: int = CDP_PORT_DEFAULT, gui_path: str = "") -> dict:
     """
     用 CDP 打开 Yakit GUI 的 Web Fuzzer 页面
