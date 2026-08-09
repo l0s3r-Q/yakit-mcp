@@ -243,6 +243,7 @@ def yakit_replay(
             time.sleep(wait_gui_seconds)
         out_dir = capture_output_dir or _default_output_dir()
         # 0) CDP send-to-tab 官方前端通道（新开干净 tab + 填请求）
+        st = {"ok": False}
         if cdp_ready(9333, timeout=2):
             try:
                 st = cdp_send_to_tab(9333, packet=packet,
@@ -267,6 +268,13 @@ def yakit_replay(
                 cap["send_clicked"] = send_r.get("clicked", "")
                 cap["response_found"] = send_r.get("response_found", False)
                 result["capture"] = cap
+                # 重放完成后自动关闭新开的 tab，防止窗口堆积卡顿
+                if result.get("send_to_tab", {}).get("ok") or st.get("ok"):
+                    try:
+                        cl = cdp_close_webfuzzer_tab(9333)
+                        result["tab_closed"] = cl
+                    except Exception:
+                        result["tab_closed"] = {"ok": False}
                 return json.dumps(result, ensure_ascii=False, indent=2, default=str)
         # 2) PrintWindow 窗口截图（无视遮挡）
         cap = capture_window_clean(capture_title, output_dir=out_dir, timeout=8.0)
