@@ -61,6 +61,20 @@ def list_tasks() -> dict:
         return {"ok": True, "total": len(items), "tasks": items}
 
 
+def cancel_task(task_id: str) -> dict:
+    """停止后台任务（取消 gRPC 流）"""
+    with _LOCK:
+        info = _TASKS.get(task_id)
+        if not info:
+            return {"ok": False, "reason": f"任务不存在: {task_id}"}
+        if info.status == "done":
+            return {"ok": True, "task_id": task_id, "status": "done", "note": "任务已完成"}
+        # 标记取消（线程会在下次迭代检测）
+        info.status = "cancelled"
+        info.finished_at = time.time()
+        return {"ok": True, "task_id": task_id, "status": "cancelled"}
+
+
 def get_task(task_id: str) -> dict:
     """查询单个任务状态 + 结果"""
     with _LOCK:

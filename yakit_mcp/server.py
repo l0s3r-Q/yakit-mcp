@@ -59,6 +59,9 @@ from yakit_mcp.engine import (
     exec_yak_code,
     export_http_flows,
     extract_url,
+    facade_start,
+    facade_start_with_yso,
+    facade_stop,
     find_yakit_engine,
     find_yakit_gui,
     generate_csrf_poc,
@@ -93,6 +96,7 @@ from yakit_mcp.engine import (
     task_list,
     task_status,
     task_wait,
+    waf_detect,
     webshell_basic_info,
     yso_gadgets,
     yso_generate,
@@ -1042,6 +1046,60 @@ def yakit_reverse_configure(tunnel_addr: str = "", tunnel_secret: str = "",
     """配置全局反连服务器（tunnel_addr 必填，如 1.2.3.4:8088；local_addr 可选本地监听）。"""
     engine = get_engine()
     r = config_global_reverse(engine, tunnel_addr, tunnel_secret, local_addr)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Facades 端口转发/反连监听
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def yakit_facade_start(local_port: int = 8088, local_host: str = "0.0.0.0",
+                       remote_port: int = 0, external_domain: str = "",
+                       enable_dnslog: bool = False, dnslog_port: int = 0,
+                       tunnel_addr: str = "", tunnel_secret: str = "") -> str:
+    """
+    启动 Facades 监听（端口转发/反连接收）。
+    本地监听 local_host:local_port，可配合隧道转发到远程。
+    enable_dnslog: 同时启动 DNSLog 服务。
+    返回 task_id（后台运行），用 yakit_task_status 查状态，yakit_facade_stop 停止。
+    """
+    engine = get_engine()
+    r = facade_start(engine, local_port, local_host, remote_port, external_domain,
+                     enable_dnslog, dnslog_port, tunnel_addr, tunnel_secret)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_facade_yso(reverse_port: int = 8088, reverse_host: str = "",
+                     token: str = "", is_remote: bool = False,
+                     tunnel_addr: str = "", tunnel_secret: str = "",
+                     gadget: str = "CommonsCollections1",
+                     class_name: str = "", options: str = "{}") -> str:
+    """
+    启动 Facades + YSO 监听（反序列化回连接收）。
+    用于 ysoserial payload 打回目标后接收连接。
+    """
+    engine = get_engine()
+    r = facade_start_with_yso(engine, reverse_port, reverse_host, token, is_remote,
+                              tunnel_addr, tunnel_secret, gadget, class_name, options)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_facade_stop(task_id: str) -> str:
+    """停止 Facades 监听（取消后台任务）。"""
+    r = facade_stop(task_id)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_waf_detect(url: str, timeout: float = 15) -> str:
+    """
+    WAF 识别: 对目标发正常请求 + SQL 注入探测请求，比对响应特征判断是否存在 WAF 及类型。
+    内置 30+ WAF 指纹（Cloudflare/安全狗/360/加速乐/阿里云盾/腾讯云/ModSecurity 等）。
+    """
+    engine = get_engine()
+    r = waf_detect(engine, url, timeout)
     return json.dumps(r, ensure_ascii=False, indent=2)
 
 

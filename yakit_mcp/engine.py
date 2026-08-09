@@ -1887,3 +1887,196 @@ def humanize_error(raw: str) -> str:
         if pat.lower() in str(raw).lower():
             return msg
     return str(raw)[:300]
+
+
+# ---------------------------------------------------------------------------
+# Facades 端口转发/反连监听
+# ---------------------------------------------------------------------------
+def facade_start(engine: YakEngine, local_port: int = 8088,
+                 local_host: str = "0.0.0.0",
+                 remote_port: int = 0, external_domain: str = "",
+                 enable_dnslog: bool = False, dnslog_port: int = 0,
+                 tunnel_addr: str = "", tunnel_secret: str = "") -> dict:
+    """
+    启动 Facades 监听（StartFacades）—— 端口转发/反连接收。
+    本地监听 local_host:local_port，转发到远程（tunnel_addr 提供时）或接收反连。
+    remote_port: 远程端口（默认等于 local_port）
+    external_domain: 外部域名（可选）
+    enable_dnslog: 同时启用 DNSLog 服务
+    返回: task_id（后台运行，用 yakit_task_status 查状态）
+    """
+    from .tasks import start_stream_task
+    stub = engine.connect()
+    req = ypb.StartFacadesParams()
+    req.LocalFacadeHost = local_host
+    req.LocalFacadePort = local_port
+    req.FacadeRemotePort = remote_port or local_port
+    if external_domain:
+        req.ExternalDomain = external_domain
+    if enable_dnslog:
+        req.EnableDNSLogServer = True
+        req.DNSLogLocalPort = dnslog_port or local_port + 1
+    if tunnel_addr:
+        req.ConnectParam.Addr = tunnel_addr
+        if tunnel_secret:
+            req.ConnectParam.Secret = tunnel_secret
+        req.Verify = True
+    else:
+        # 本地监听模式：不验证隧道
+        req.Verify = False
+    tid = start_stream_task(f"facade {local_host}:{local_port}", lambda: stub.StartFacades(req, timeout=3600))
+    return {"ok": True, "task_id": tid, "local_addr": f"{local_host}:{local_port}",
+            "remote_port": req.FacadeRemotePort, "hint": "用 yakit_task_status 查监听状态，任务取消即停止"}
+
+
+def facade_start_with_yso(engine: YakEngine, reverse_port: int = 8088,
+                          reverse_host: str = "", token: str = "",
+                          is_remote: bool = False,
+                          tunnel_addr: str = "", tunnel_secret: str = "",
+                          gadget: str = "CommonsCollections1",
+                          class_name: str = "", options: str = "{}") -> dict:
+    """
+    启动 Facades + YSO 反序列化监听（StartFacadesWithYsoObject）。
+    用于: 反序列化攻击回连接收（如 ysoserial 生成的 payload 打回来）。
+    reverse_host: 监听 host（默认本机）
+    gadget/class_name/options: YSO 生成参数（dnslog/win_cmd 等）
+    返回: task_id
+    """
+    from .tasks import start_stream_task
+    stub = engine.connect()
+    req = ypb.StartFacadesWithYsoParams()
+    req.IsRemote = is_remote
+    req.ReversePort = reverse_port
+    if reverse_host:
+        req.ReverseHost = reverse_host
+    if token:
+        req.Token = token
+    if tunnel_addr:
+        req.BridgeParam.Addr = tunnel_addr
+        if tunnel_secret:
+            req.BridgeParam.Secret = tunnel_secret
+    # YSO 参数
+    if class_name or options != "{}":
+        yso = ypb.YsoOptionsRequerst()
+        yso.Gadget = gadget
+        if class_name:
+            yso.Class = class_name
+        try:
+            opts = json.loads(options)
+            for k, v in opts.items():
+                item = ypb.YsoClassGeneraterOptions()
+                item.Key = k
+                item.Value = str(v) if not isinstance(v, dict) else str(v.get("value", ""))
+                yso.Options.append(item)
+        except Exception:
+            pass
+        req.GenerateClassParams.CopyFrom(yso)
+    tid = start_stream_task(f"facade-yso :{reverse_port}", lambda: stub.StartFacadesWithYsoObject(req, timeout=3600))
+    return {"ok": True, "task_id": tid, "reverse_port": reverse_port, "gadget": gadget,
+            "hint": "用 yakit_task_status 查回连状态"}
+
+
+def facade_stop(task_id: str) -> dict:
+    """停止 Facades 监听（取消后台任务）"""
+    from .tasks import cancel_task
+    return cancel_task(task_id)
+
+
+# ---------------------------------------------------------------------------
+# WAF 识别
+# ---------------------------------------------------------------------------
+# 常见 WAF 指纹（响应头/特征串 → WAF 名称）
+_WAF_RULES = [
+    # (特征, WAF 名, 类型)
+    ("Server: cloudflare", "Cloudflare", "server"),
+    ("__cf_bm", "Cloudflare", "cookie"),
+    ("cf-ray", "Cloudflare", "header"),
+    ("Server: awselb", "AWS WAF (ELB)", "server"),
+    ("Server: BigIP", "F5 BIG-IP ASM", "server"),
+    ("X-Powered-By-ASPNET", "Microsoft IIS/ASP.NET", "server"),
+    ("Server: Microsoft-IIS", "IIS", "server"),
+    ("Server: nginx", "Nginx", "server"),
+    ("Server: openresty", "OpenResty (常配 WAF)", "server"),
+    ("Server: AliyunOSS", "阿里云 OSS/WAF", "server"),
+    ("Server: Tengine", "Tengine (阿里)", "server"),
+    ("X-Safe-Firewall", "安全狗 (Safedog)", "header"),
+    ("safedog", "安全狗 (Safedog)", "cookie"),
+    ("X-D-Server", "D盾 (D-Safe)", "header"),
+    ("360wzws", "360 网站卫士", "cookie"),
+    ("X-Powered-Cdn", "加速乐 (Jiasule)", "header"),
+    ("__jsluid_s", "加速乐 Jiasule CDN/WAF", "cookie"),
+    ("__jsl_clearance", "加速乐 Jiasule", "cookie"),
+    ("X-Cdn-Src-Port", "百度云加速", "header"),
+    ("Yundun", "阿里云盾 (Yundun)", "cookie"),
+    ("X-Cache: bypass", "CDN 缓存 (疑似 WAF)", "header"),
+    ("telerik", "Telerik", "cookie"),
+    ("Triggered", "腾讯云 WAF", "body"),
+    ("waf.tencent", "腾讯云 WAF", "header"),
+    ("ksyun-waf", "金山云 WAF", "header"),
+    ("wangzhan.360", "360 网站卫士", "header"),
+    ("Blocked by WAF", "通用 WAF", "body"),
+    ("Mod_Security", "ModSecurity", "header"),
+    ("Server: ATS", "Apache Traffic Server", "server"),
+    ("Server: Varnish", "Varnish (CDN)", "server"),
+]
+
+
+def waf_detect(engine: YakEngine, url: str, timeout: float = 15) -> dict:
+    """
+    WAF 识别: 对目标发正常请求 + 恶意探测请求，比对响应特征判断 WAF。
+    返回: {waf_found, wafs[], evidence, blocked}
+    """
+    stub = engine.connect()
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        host = parsed.netloc or url
+        path = parsed.path or "/"
+        # 构造请求
+        normal_req = f"GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+        evil_req = f"GET {path}?id=1%27%20OR%20%271%27%3D%271%27%20AND%20(SELECT%201%20FROM%20(SELECT%20SLEEP(3))a)--%20 HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Mozilla/5.0\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+
+        def _send(pkt):
+            req = ypb.FuzzerRequest()
+            req.Request = pkt.encode("utf-8")
+            req.IsHTTPS = url.startswith("https")
+            req.NoSystemProxy = True
+            req.PerRequestTimeoutSeconds = timeout
+            for resp in stub.HTTPFuzzer(req, timeout=timeout + 10):
+                if resp.ResponseRaw:
+                    return resp.ResponseRaw.decode("utf-8", errors="replace")
+            return ""
+
+        normal_resp = _send(normal_req)
+        evil_resp = _send(evil_req)
+
+        found = []
+        evidence = []
+        # 正常响应特征
+        for pattern, name, typ in _WAF_RULES:
+            if pattern.lower() in (normal_resp + evil_resp).lower():
+                found.append(name)
+                evidence.append(f"{name}: 命中特征 {pattern}")
+        # 恶意请求被拦截（状态码异常/返回拦截页）
+        blocked = False
+        normal_status = normal_resp.split("\r\n")[0][:50] if normal_resp else ""
+        evil_status = evil_resp.split("\r\n")[0][:50] if evil_resp else ""
+        if evil_resp and "403" in evil_status or "406" in evil_status or "418" in evil_status:
+            blocked = True
+            evidence.append(f"恶意请求被拦截: {evil_status}")
+        if evil_resp and len(evil_resp) < 500 and normal_resp and len(normal_resp) > 500:
+            blocked = True
+            evidence.append("恶意请求响应明显小于正常响应（疑似 WAF 拦截）")
+
+        return {
+            "ok": True,
+            "url": url,
+            "waf_found": bool(found) or blocked,
+            "wafs": list(dict.fromkeys(found)),
+            "blocked": blocked,
+            "evidence": evidence[:10],
+            "normal_status": normal_status,
+            "evil_status": evil_status,
+        }
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
