@@ -59,9 +59,13 @@ from yakit_mcp.engine import (
     mitm_status,
     mitm_stop,
     parse_http_packet,
+    exec_packet_plugin,
+    exec_plugin,
+    plugin_tags,
     port_scan,
     push_webfuzzer_tab,
     query_domains,
+    query_plugins,
     query_http_flows,
     query_hosts,
     query_mitm_flows,
@@ -756,6 +760,44 @@ def yakit_extract_url(packet: str) -> str:
     """从 HTTP 请求包提取 URL。"""
     engine = get_engine()
     r = extract_url(engine, packet)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# 插件与脚本域
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def yakit_query_plugins(keyword: str = "", limit: int = 50) -> str:
+    """查询本地 Yakit 插件（QueryYakScript），支持关键词过滤。"""
+    engine = get_engine()
+    r = query_plugins(engine, keyword, limit)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_exec_plugin(script_name: str, params: str = "") -> str:
+    """执行 Yakit 插件（ExecYakScript），可用于端口扫描/漏洞检测等。
+
+    params 为 JSON 字符串（插件参数，如 {"host":"127.0.0.1"}）。
+    """
+    engine = get_engine()
+    r = exec_plugin(engine, script_name, params)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_exec_packet_plugin(script_name: str, packet: str) -> str:
+    """对 HTTP 数据包执行插件（ExecutePacketYakScript）—— 插件扫描/检测单个请求。"""
+    engine = get_engine()
+    r = exec_packet_plugin(engine, script_name, packet)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_plugin_tags() -> str:
+    """获取 Yakit 插件的标签列表（用于筛选插件）。"""
+    engine = get_engine()
+    r = plugin_tags(engine)
     return json.dumps(r, ensure_ascii=False, indent=2)
 
 

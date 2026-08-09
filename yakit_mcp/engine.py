@@ -1069,3 +1069,125 @@ def extract_url(engine: YakEngine, packet: str) -> dict:
         return {"ok": True, "url": resp.Url}
     except Exception as e:
         return {"ok": False, "reason": repr(e)}
+
+
+# ---------------------------------------------------------------------------
+# 插件/脚本: 查询 / 执行 / 对包执行
+# ---------------------------------------------------------------------------
+def query_plugins(engine: YakEngine, keyword: str = "", limit: int = 50,
+                  tags: str = "") -> dict:
+    """查询本地插件（YakScript）"""
+    stub = engine.connect()
+    try:
+        req = ypb.QueryYakScriptRequest()
+        req.Pagination.Limit = limit
+        req.Pagination.Page = 1
+        if keyword:
+            req.Keyword = keyword
+        if tags:
+            req.Tag.extend([t.strip() for t in tags.split(",") if t.strip()])
+        resp = stub.QueryYakScript(req)
+        plugins = []
+        for p in resp.Data or []:
+            plugins.append({
+                "id": p.Id,
+                "name": p.ScriptName,
+                "type": p.Type,
+                "tags": [t for t in (p.Tags or "").split(",") if t],
+                "description": (p.Help or "")[:200],
+                "level": p.Level,
+            })
+        return {"ok": True, "total": resp.Total, "plugins": plugins}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def exec_plugin(engine: YakEngine, script_name: str, params: str = "",
+                work_dir: str = "") -> dict:
+    """
+    执行 Yakit 插件（ExecYakScript）。
+    参数: script_name(插件名或ID), params(参数 JSON,如 {"target":"1.2.3.4"}), work_dir
+    注意: 引擎要求 ScriptId/YakScriptId 字段（Script 传名字会报 cannot fetch yak script），
+          这里先按名字查 id 再执行。
+    """
+    stub = engine.connect()
+    try:
+        # 1) 按名字查插件 id（QueryYakScript）
+        script_id = 0
+        if script_name.isdigit():
+            script_id = int(script_name)
+        else:
+            q = ypb.QueryYakScriptRequest()
+            q.Pagination.Limit = 50
+            q.Pagination.Page = 1
+            q.Keyword = script_name
+            try:
+                qresp = stub.QueryYakScript(q)
+                for p in qresp.Data or []:
+                    if p.ScriptName == script_name:
+                        script_id = p.Id
+                        break
+                if not script_id and qresp.Data:
+                    script_id = qresp.Data[0].Id
+            except Exception:
+                pass
+        if not script_id:
+            return {"ok": False, "reason": f"未找到插件: {script_name}"}
+
+        # 2) 执行
+        req = ypb.ExecRequest()
+        req.YakScriptId = script_id
+        if params:
+            try:
+                p = json.loads(params)
+                for k, v in p.items():
+                    item = ypb.ExecParamItem()
+                    item.Key = k
+                    item.Value = str(v)
+                    req.Params.append(item)
+            except Exception:
+                item = ypb.ExecParamItem()
+                item.Key = "target"
+                item.Value = params
+                req.Params.append(item)
+        if work_dir:
+            req.WorkDir = work_dir
+        results = []
+        for resp in stub.ExecYakScript(req, timeout=300):
+            msg = resp.Message or b""
+            if msg:
+                results.append(msg.decode("utf-8", errors="replace")[:2000])
+            if resp.Raw:
+                results.append(resp.Raw.decode("utf-8", errors="replace")[:300])
+        return {"ok": True, "script": script_name, "script_id": script_id, "results": results[:50]}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def exec_packet_plugin(engine: YakEngine, script_name: str, packet: str,
+                       is_https: bool = False) -> dict:
+    """对 HTTP 包执行插件（ExecutePacketYakScript）—— 插件扫描/检测单个请求"""
+    stub = engine.connect()
+    try:
+        req = ypb.ExecutePacketYakScriptParams()
+        req.ScriptName = script_name
+        req.IsHttps = is_https
+        req.Request = packet.encode("utf-8")
+        results = []
+        for resp in stub.ExecutePacketYakScript(req, timeout=300):
+            msg = resp.Message or b""
+            if msg:
+                results.append(msg.decode("utf-8", errors="replace")[:400])
+        return {"ok": True, "script": script_name, "results": results[:50]}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def plugin_tags(engine: YakEngine) -> dict:
+    """获取插件标签列表"""
+    stub = engine.connect()
+    try:
+        resp = stub.GetYakScriptTags(ypb.Empty())
+        return {"ok": True, "tags": [{"value": t.Value, "total": t.Total} for t in (resp.Tag or [])]}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
