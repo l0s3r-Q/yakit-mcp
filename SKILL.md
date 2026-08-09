@@ -35,17 +35,74 @@ description: Yakit 重放与截图。当用户要求"用Yakit重放这个包"、
 7. **截图**：CDP `Page.captureScreenshot` 页面级高清（1923×1425）
 8. **关闭 tab**：截图后自动点 tab 的 × 关闭新开的小窗口（防止窗口堆积卡顿）
 
-## 工具清单
+## 工具清单（43 个，全功能版）
 
+### 核心重放与流量
 | 工具 | 作用 |
 |------|------|
 | `yakit_status()` | 引擎/GUI 状态检查 |
-| `yakit_replay(packet, is_https, auto_protocol, try_both, sync_gui_https, proxy, timeout, save_to_gui, capture, ...)` | 重放单包（核心，全自动链路） |
-| `yakit_replay_batch(packets_json, is_https, concurrency)` | 批量重放 |
-| `yakit_open_webfuzzer(launch_gui)` | 用 CDP 打开 Yakit GUI 的 Web Fuzzer 页面 |
-| `yakit_capture(window_title, output_dir, prefer_cdp)` | 截取 Yakit 画面（CDP → PrintWindow → 渲染三级降级） |
+| `yakit_replay(packet, auto_protocol, try_both, sync_gui_https, proxy, timeout, save_to_gui, capture, ...)` | 重放单包（核心，全自动链路） |
+| `yakit_replay_batch(packets_json, concurrency)` | 批量重放 |
 | `yakit_query_flows(keyword, limit)` | 查询历史流量 |
-| `yakit_parse_packet(packet)` | 解析报文（调试用） |
+| `yakit_parse_packet(packet)` | 解析报文（method/host/headers/body/协议线索） |
+| `yakit_extract_url(packet)` | 从请求包提取 URL |
+
+### GUI 联动与截图
+| 工具 | 作用 |
+|------|------|
+| `yakit_open_webfuzzer(launch_gui)` | 用 CDP 打开 Yakit GUI 的 Web Fuzzer 页面 |
+| `yakit_open_webfuzzer_with_packet(packet, is_https)` | 官方 IPC 通道新开干净 tab 填请求 |
+| `yakit_capture(window_title, output_dir, prefer_cdp)` | 截取 Yakit 画面（CDP → PrintWindow → 渲染三级降级） |
+
+### 历史与分组
+| 工具 | 作用 |
+|------|------|
+| `yakit_clear_history(task_id)` | 数据库层清空 Web Fuzzer 历史（根治旧内容残留） |
+| `yakit_list_tasks()` | 列出历史任务 |
+| `yakit_list_labels()` / `yakit_add_label()` / `yakit_delete_label()` | 分组标签增/查/删 |
+
+### MITM 抓包
+| 工具 | 作用 |
+|------|------|
+| `yakit_mitm_start(port, filters)` | 启动 MITM 监听 |
+| `yakit_mitm_stop()` / `yakit_mitm_status()` | 停止/状态 |
+| `yakit_mitm_flows(after_id, limit)` | 增量获取抓到流量 |
+
+### 主动扫描
+| 工具 | 作用 |
+|------|------|
+| `yakit_port_scan(targets, ports)` | 端口扫描 |
+| `yakit_simple_detect(target)` | 漏洞检测（nuclei） |
+| `yakit_start_brute(target, types)` / `yakit_brute_types()` | 弱口令爆破 |
+| `yakit_basic_crawler(target)` | 基础爬虫 |
+
+### 资产查询
+| 工具 | 作用 |
+|------|------|
+| `yakit_query_ports()` / `yakit_query_hosts()` / `yakit_query_domains()` / `yakit_query_risks()` | 端口/主机/域名/风险（漏洞） |
+
+### 编码与反连
+| 工具 | 作用 |
+|------|------|
+| `yakit_codec(text, codec_type)` / `yakit_codec_methods()` | 编解码（53 种方法） |
+| `yakit_auto_decode(data)` | 自动解码 |
+| `yakit_dnslog_domain()` / `yakit_dnslog_query(token)` | DNSLog 反连 |
+| `yakit_reverse_server()` | 反连服务器信息 |
+
+### 插件体系
+| 工具 | 作用 |
+|------|------|
+| `yakit_query_plugins(keyword, tags)` | 查询本地插件（1599+） |
+| `yakit_exec_plugin(script_name, params)` | 执行插件 |
+| `yakit_exec_packet_plugin(script_name, packet)` | 对包执行插件 |
+| `yakit_plugin_tags()` | 插件标签列表 |
+
+### 攻防工具
+| 工具 | 作用 |
+|------|------|
+| `yakit_yso_generate(gadget, class_name, options)` / `yakit_yso_gadgets()` | YSO payload 生成 |
+| `yakit_reverse_shell(ip, port)` / `yakit_reverse_shell_programs()` | 反弹 shell 命令 |
+| `yakit_webshell_query(tag)` / `yakit_webshell_ping(id)` | WebShell 管理 |
 
 ## 截图三级降级策略
 
