@@ -42,6 +42,7 @@ from yakit_mcp.engine import (
     DEFAULT_HOST,
     DEFAULT_PORT,
     YakEngine,
+    auto_decode,
     basic_crawler,
     brute_types,
     clear_fuzzer_history,
@@ -50,6 +51,8 @@ from yakit_mcp.engine import (
     delete_fuzzer_label,
     dnslog_domain,
     dnslog_query,
+    exec_packet_plugin,
+    exec_plugin,
     extract_url,
     find_yakit_engine,
     find_yakit_gui,
@@ -59,22 +62,24 @@ from yakit_mcp.engine import (
     mitm_status,
     mitm_stop,
     parse_http_packet,
-    exec_packet_plugin,
-    exec_plugin,
     plugin_tags,
     port_scan,
     push_webfuzzer_tab,
     query_domains,
-    query_plugins,
     query_http_flows,
     query_hosts,
     query_mitm_flows,
+    query_plugins,
     query_ports,
     query_risks,
     replay_packet,
+    reverse_shell,
+    reverse_shell_programs,
     save_fuzzer_label,
     simple_detect,
     start_brute,
+    yso_gadgets,
+    yso_generate,
 )
 
 mcp = FastMCP("yakit-mcp")
@@ -798,6 +803,52 @@ def yakit_plugin_tags() -> str:
     """获取 Yakit 插件的标签列表（用于筛选插件）。"""
     engine = get_engine()
     r = plugin_tags(engine)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# 攻防工具: 反弹shell / 自动解码 / YSO
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def yakit_reverse_shell(ip: str, port: int, system: str = "linux",
+                        shell_type: str = "bash", cmd_type: str = "bash-i",
+                        encode: str = "") -> str:
+    """生成反弹 shell 命令（linux/windows，bash/powershell 等，可选编码）。"""
+    engine = get_engine()
+    r = reverse_shell(engine, ip, port, system, shell_type, cmd_type, encode)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_reverse_shell_programs() -> str:
+    """获取可用的反弹 shell 程序列表（系统/类型/编码组合）。"""
+    engine = get_engine()
+    r = reverse_shell_programs(engine)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_auto_decode(data: str) -> str:
+    """自动解码数据（不需要指定编码方式，自动识别 base64/url/hex 等）。"""
+    engine = get_engine()
+    r = auto_decode(engine, data)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_yso_generate(gadget: str = "CommonsCollections1",
+                       class_name: str = "dnslog", options: str = "{}") -> str:
+    """生成 Yso 序列化 payload（返回 base64）。class_name: dnslog/win_cmd/linux_cmd/jndi/bcel 等。"""
+    engine = get_engine()
+    r = yso_generate(engine, gadget, class_name, options)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_yso_gadgets() -> str:
+    """获取可用的 YSO gadget 列表。"""
+    engine = get_engine()
+    r = yso_gadgets(engine)
     return json.dumps(r, ensure_ascii=False, indent=2)
 
 

@@ -5,6 +5,7 @@ yakit-mcp: Yakit 引擎 gRPC 驱动 + GUI 联动 + 窗口截图
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import socket
@@ -1189,5 +1190,114 @@ def plugin_tags(engine: YakEngine) -> dict:
     try:
         resp = stub.GetYakScriptTags(ypb.Empty())
         return {"ok": True, "tags": [{"value": t.Value, "total": t.Total} for t in (resp.Tag or [])]}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def reverse_shell(engine: YakEngine, ip: str, port: int,
+                  system: str = "linux", shell_type: str = "bash",
+                  cmd_type: str = "bash-i", encode: str = "") -> dict:
+    """
+    生成反弹 shell 命令（GenerateReverseShellCommand）。
+    system: linux/windows; shell_type: bash/sh/cmd/powershell 等; encode: 可选编码
+    """
+    stub = engine.connect()
+    try:
+        req = ypb.GenerateReverseShellCommandRequest()
+        req.IP = ip
+        req.port = port
+        req.System = system
+        req.ShellType = shell_type
+        req.CmdType = cmd_type
+        if encode:
+            req.Encode = encode
+        resp = stub.GenerateReverseShellCommand(req)
+        return {"ok": True, "result": resp.Result or ""}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def reverse_shell_programs(engine: YakEngine) -> dict:
+    """获取可用的反弹 shell 程序/Shell 列表（GetReverseShellProgramList）"""
+    stub = engine.connect()
+    try:
+        req = ypb.GetReverseShellProgramListRequest()
+        resp = stub.GetReverseShellProgramList(req)
+        return {
+            "ok": True,
+            "programs": list(resp.ProgramList or [])[:100],
+            "shells": list(resp.ShellList or [])[:100],
+        }
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def auto_decode(engine: YakEngine, data: str) -> dict:
+    """自动解码（AutoDecode）—— 不需要指定编码方式"""
+    stub = engine.connect()
+    try:
+        req = ypb.AutoDecodeRequest()
+        req.Data = data
+        resp = stub.AutoDecode(req)
+        results = []
+        for m in (resp.Results or []):
+            results.append({
+                "type": m.Type or "",
+                "type_verbose": m.TypeVerbose or "",
+                "origin": m.Origin.decode("utf-8", errors="replace") if m.Origin else "",
+                "result": m.Result.decode("utf-8", errors="replace") if m.Result else "",
+                "modified": bool(m.Modify),
+            })
+        return {"ok": True, "data": data, "results": results}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def yso_generate(engine: YakEngine, gadget: str = "CommonsCollections1",
+                 class_name: str = "dnslog", options: str = "{}") -> dict:
+    """
+    生成 Yso 序列化 payload（GenerateYsoBytes）。
+    class_name 为命令类型: dnslog / win_cmd / linux_cmd / jndi / bcel / raw_cmd / httplog / loadjar。
+    options 为 JSON，如 {"cmd":"whoami"} 或 {"cmd":{"value":"whoami"}}。
+    """
+    stub = engine.connect()
+    try:
+        req = ypb.YsoOptionsRequerstWithVerbose()
+        req.Gadget = gadget
+        if class_name:
+            req.Class = class_name
+        if options:
+            try:
+                opts = json.loads(options)
+                for k, v in opts.items():
+                    item = ypb.YsoClassGeneraterOptionsWithVerbose()
+                    item.Key = k
+                    if isinstance(v, dict):
+                        item.Type = v.get("type", "string")
+                        item.Value = str(v.get("value", ""))
+                    else:
+                        item.Value = str(v)
+                    req.Options.append(item)
+            except Exception:
+                pass
+        resp = stub.GenerateYsoBytes(req)
+        data = (resp.Bytes or b"")
+        return {
+            "ok": True,
+            "gadget": gadget,
+            "class": class_name,
+            "payload_b64": base64.b64encode(data).decode() if data else "",
+            "size": len(data),
+        }
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def yso_gadgets(engine: YakEngine) -> dict:
+    """获取可用的 YSO gadget 列表（GetAllYsoGadgetOptions）"""
+    stub = engine.connect()
+    try:
+        resp = stub.GetAllYsoGadgetOptions(ypb.Empty())
+        return {"ok": True, "gadgets": [o.Name for o in (resp.Options or []) if o.Name]}
     except Exception as e:
         return {"ok": False, "reason": repr(e)}
