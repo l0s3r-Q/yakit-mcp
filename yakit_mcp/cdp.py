@@ -209,8 +209,8 @@ def cdp_new_webfuzzer_tab(port: int = CDP_PORT_DEFAULT) -> dict:
 
 def cdp_close_webfuzzer_tab(port: int = CDP_PORT_DEFAULT, tab_text: str = "") -> dict:
     """
-    通过 CDP 关闭 Web Fuzzer tab（点 × 关闭按钮），防止窗口增多卡顿。
-    tab_text: 指定关闭的 tab 文本（如 "123456"）；空则关闭当前活动的 tab。
+    通过 CDP 关闭 Web Fuzzer tab（官方 IPC 通道 send-close-tab），防止窗口增多卡顿。
+    源码: HTTPFuzzerPage.tsx send-close-tab → communication.js → fetch-close-tab → removeMenuPage
     返回: {ok, closed, reason}
     """
     if not cdp_ready(port, timeout=3):
@@ -223,46 +223,17 @@ def cdp_close_webfuzzer_tab(port: int = CDP_PORT_DEFAULT, tab_text: str = "") ->
     msg_id = [0]
     try:
         _rpc(ws, "Runtime.enable", {}, msg_id)
-        # 找 tab 上的关闭按钮并点击
-        result = _eval(ws, """(() => {
-            // 方式1: 数字 tab（如 123456）附近的关闭按钮（anticon-close / CloseOutlined）
-            const tabTarget = %s;
-            const six = tabTarget
-                ? [...document.querySelectorAll('*')].find(e => e.textContent.trim() === tabTarget && e.children.length === 0)
-                : null;
-            // 找 tab 容器
-            let container = null;
-            if (six) {
-                container = six.parentElement;
-                for (let i = 0; i < 5 && container; i++) {
-                    const close = [...container.querySelectorAll('*')].find(e => {
-                        const cls = (e.className || '').toString();
-                        return /anticon-close|close/i.test(cls) && e.children.length === 0;
-                    });
-                    if (close) { close.click(); return 'clicked close btn for tab'; }
-                    container = container.parentElement;
-                }
-            }
-            // 方式2: 任意 tab 容器内的关闭按钮（如果只有一个 tab，关它）
-            const tabbar = document.querySelector('[class*=tab-menu-sub-body], [class*=tab-menu-sub]');
-            if (tabbar) {
-                const close = [...tabbar.querySelectorAll('*')].find(e => {
-                    const cls = (e.className || '').toString();
-                    return /anticon-close|close/i.test(cls) && e.children.length === 0;
-                });
-                if (close) { close.click(); return 'clicked close in tab bar'; }
-            }
-            // 方式3: 按钮含 × 文本
-            const xbtns = [...document.querySelectorAll('span, i, button')].filter(e => {
-                const t = e.textContent.trim();
-                return t === '×' || t === 'x' || t === '✕' || t === '✖';
-            });
-            if (xbtns.length) { xbtns[0].click(); return 'clicked x btn'; }
-            return 'no close btn found';
-        })()""" % (repr(tab_text) if tab_text else "null"), msg_id)
+        # 官方通道: ipcRenderer.invoke('send-close-tab', {router: 'HTTPFuzzer'})
+        result = _eval(ws, """(async () => {
+            try {
+                const ipc = window.require('electron').ipcRenderer;
+                await ipc.invoke('send-close-tab', {router: 'HTTPFuzzer', name: 'Web Fuzzer'});
+                return 'ok';
+            } catch(e) { return 'ERR:' + e.message; }
+        })()""", msg_id)
         time.sleep(1.5)
         ws.close()
-        return {"ok": bool(result) and 'clicked' in str(result), "closed": str(result)}
+        return {"ok": str(result) == "ok", "closed": str(result)}
     except Exception as e:
         try:
             ws.close()
