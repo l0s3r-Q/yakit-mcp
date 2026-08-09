@@ -19,7 +19,12 @@ from . import grpc_pb2 as ypb
 from . import grpc_pb2_grpc as ygrpc
 
 
-class _AuthInterceptor(grpc.UnaryUnaryClientInterceptor, grpc.StreamStreamClientInterceptor):
+class _AuthInterceptor(
+    grpc.UnaryUnaryClientInterceptor,
+    grpc.UnaryStreamClientInterceptor,
+    grpc.StreamUnaryClientInterceptor,
+    grpc.StreamStreamClientInterceptor,
+):
     """gRPC 客户端拦截器: 为所有请求注入 authorization metadata（local-password 模式）"""
 
     def __init__(self, metadata):
@@ -30,6 +35,12 @@ class _AuthInterceptor(grpc.UnaryUnaryClientInterceptor, grpc.StreamStreamClient
 
     def intercept_unary_unary(self, continuation, client_call_details, request):
         return continuation(self._with_metadata(client_call_details), request)
+
+    def intercept_unary_stream(self, continuation, client_call_details, request):
+        return continuation(self._with_metadata(client_call_details), request)
+
+    def intercept_stream_unary(self, continuation, client_call_details, request_iterator):
+        return continuation(self._with_metadata(client_call_details), request_iterator)
 
     def intercept_stream_stream(self, continuation, client_call_details, request_iterator):
         return continuation(self._with_metadata(client_call_details), request_iterator)
