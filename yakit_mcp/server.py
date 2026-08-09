@@ -48,9 +48,13 @@ from yakit_mcp.engine import (
     find_yakit_gui,
     list_fuzzer_history,
     list_fuzzer_labels,
+    mitm_start,
+    mitm_status,
+    mitm_stop,
     parse_http_packet,
     push_webfuzzer_tab,
     query_http_flows,
+    query_mitm_flows,
     replay_packet,
     save_fuzzer_label,
 )
@@ -507,6 +511,62 @@ def yakit_delete_label(hash_value: str) -> str:
     """
     engine = get_engine()
     r = delete_fuzzer_label(engine, hash_value)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# MITM 中间人抓包
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def yakit_mitm_start(port: int = 8083, host: str = "0.0.0.0",
+                     include_hostname: str = "", exclude_hostname: str = "") -> str:
+    """
+    启动 Yakit MITM 中间人抓包监听。
+    抓到的 HTTP 流量写入引擎库（SourceType=mitm），用 yakit_mitm_flows 增量获取。
+    参数:
+      port: 监听端口（默认 8083）
+      host: 监听地址（默认 0.0.0.0）
+      include_hostname: 只抓这些域名（逗号分隔，空=全部）
+      exclude_hostname: 排除这些域名（逗号分隔）
+    """
+    engine = get_engine()
+    filters = {}
+    if include_hostname:
+        filters["include_hostname"] = [h.strip() for h in include_hostname.split(",") if h.strip()]
+    if exclude_hostname:
+        filters["exclude_hostname"] = [h.strip() for h in exclude_hostname.split(",") if h.strip()]
+    r = mitm_start(engine, port=port, host=host, filters=filters or None)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_mitm_stop(port: int = 8083) -> str:
+    """停止 Yakit MITM 监听。"""
+    engine = get_engine()
+    r = mitm_stop(engine, port=port)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_mitm_status() -> str:
+    """查看当前 MITM 监听状态。"""
+    engine = get_engine()
+    r = mitm_status(engine)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_mitm_flows(after_id: int = 0, limit: int = 50, keyword: str = "") -> str:
+    """
+    增量获取 MITM 抓到的 HTTP 流量（SourceType=mitm）。
+    参数:
+      after_id: 只返回 id 大于该值的流量（增量拉取，默认 0=全部）
+      limit: 返回条数上限（默认 50）
+      keyword: 关键词过滤（URL/Host）
+    返回: 每条含 方法/URL/状态码/请求/响应 前 2000 字符
+    """
+    engine = get_engine()
+    r = query_mitm_flows(engine, after_id=after_id, limit=limit, keyword=keyword)
     return json.dumps(r, ensure_ascii=False, indent=2)
 
 

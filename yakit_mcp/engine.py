@@ -600,3 +600,131 @@ def delete_fuzzer_label(engine: YakEngine, hash_value: str) -> dict:
         return {"ok": True, "hash": hash_value}
     except Exception as e:
         return {"ok": False, "reason": repr(e)}
+
+
+# ---------------------------------------------------------------------------
+# MITM 中间人抓包
+# ---------------------------------------------------------------------------
+# MITM 流管理（全局单例，避免多流冲突）
+_mitm_streams: dict = {}
+
+
+def mitm_start(engine: YakEngine, port: int = 8083, host: str = "0.0.0.0",
+               filters: dict | None = None, timeout: float = 5.0) -> dict:
+    """
+    启动 MITM 中间人抓包监听（MITMV2 双向流）。
+    抓到的流量写入 http_flows 表（SourceType=mitm），用 yakit_mitm_flows 增量获取。
+    返回: {ok, port, reason}
+    """
+    global _mitm_streams
+    stub = engine.connect()
+    try:
+        req = ypb.MITMV2Request()
+        req.Host = host
+        req.Port = port
+        # 过滤器
+        if filters:
+            fd = ypb.MITMFilterData()
+            for k, v in filters.items():
+                if k == "include_hostname" and v:
+                    fd.IncludeHostname.extend(v if isinstance(v, list) else [v])
+                elif k == "exclude_hostname" and v:
+                    fd.ExcludeHostname.extend(v if isinstance(v, list) else [v])
+                elif k == "exclude_suffix" and v:
+                    fd.ExcludeSuffix.extend(v if isinstance(v, list) else [v])
+                elif k == "exclude_content_types" and v:
+                    fd.ExcludeContentTypes.extend(v if isinstance(v, list) else [v])
+            req.FilterData.CopyFrom(fd)
+            req.UpdateFilter = True
+
+        def gen():
+            yield req
+            # 保持流打开（引擎会持续推送流量事件）
+            import time as _t
+            while True:
+                _t.sleep(60)
+
+        # 后台线程启动流（避免阻塞 MCP 调用）
+        import threading
+        result_box = {}
+
+        def _run():
+            try:
+                stream = stub.MITMV2(gen(), timeout=timeout)
+                first = next(stream, None)
+                result_box["stream"] = stream
+                result_box["first"] = first
+            except Exception as e:
+                result_box["error"] = repr(e)
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        t.join(timeout=timeout)
+        if "error" in result_box:
+            return {"ok": False, "reason": result_box["error"]}
+        stream = result_box.get("stream")
+        if stream is None:
+            return {"ok": False, "reason": "MITM 启动超时（可能端口被占用或引擎不支持）"}
+        # 保存流引用（保持连接）
+        _mitm_streams[port] = stream
+        return {"ok": True, "port": port, "host": host, "started": True}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def mitm_stop(engine: YakEngine, port: int = 8083) -> dict:
+    """停止 MITM 监听（关闭流）"""
+    global _mitm_streams
+    try:
+        stream = _mitm_streams.pop(port, None)
+        if stream:
+            try:
+                stream.cancel()
+            except Exception:
+                pass
+        return {"ok": True, "port": port, "stopped": True}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def mitm_status(engine: YakEngine) -> dict:
+    """查看当前 MITM 监听状态"""
+    global _mitm_streams
+    return {"ok": True, "active_ports": list(_mitm_streams.keys())}
+
+
+def query_mitm_flows(engine: YakEngine, after_id: int = 0, limit: int = 50,
+                     keyword: str = "") -> dict:
+    """
+    增量获取 MITM 抓到的 HTTP 流量（SourceType=mitm）。
+    after_id: 只返回 id 大于该值的流量（增量拉取，默认 0=全部）
+    """
+    stub = engine.connect()
+    try:
+        req = ypb.QueryHTTPFlowRequest()
+        req.SourceType = "mitm"
+        req.Pagination.Limit = limit
+        req.Pagination.Page = 1
+        if after_id > 0:
+            req.AfterId = after_id
+        if keyword:
+            req.Keyword = keyword
+        resp = stub.QueryHTTPFlows(req)
+        flows = []
+        for f in resp.Data or []:
+            flows.append({
+                "id": f.Id,
+                "method": f.Method,
+                "url": f.Url,
+                "status_code": f.StatusCode,
+                "is_https": f.IsHTTPS,
+                "content_type": f.ContentType,
+                "body_length": f.BodyLength,
+                "created_at": f.CreatedAt,
+                "source_type": f.SourceType,
+                "request": (f.Request or b"").decode("utf-8", errors="replace")[:2000],
+                "response": (f.Response or b"").decode("utf-8", errors="replace")[:2000],
+            })
+        return {"ok": True, "total": resp.Total, "flows": flows}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
