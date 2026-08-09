@@ -14,7 +14,7 @@
 - [背景与动机](#背景与动机)
 - [功能总览](#功能总览)
 - [快速开始](#快速开始)
-- [工具清单](#工具清单-13-个)
+- [工具清单](#工具清单-43-个)
 - [协议识别与双试探](#协议识别与双试探)
 - [完整链路工作流](#完整链路工作流)
 - [截图方案](#截图方案)
@@ -47,6 +47,13 @@
 | 截图三级降级 | CDP 页面级 → PrintWindow 无视遮挡 → PIL 渲染兜底 |
 | 历史管理 | 数据库层清空/列出 Web Fuzzer 历史（根治"旧内容残留"） |
 | 分组标签 | Web Fuzzer 分组标签的增/查/删 |
+| MITM 抓包 | 启动/停止 MITM 监听，增量获取抓到的流量 |
+| 主动扫描 | 端口扫描 / 漏洞检测 / 弱口令爆破 / 基础爬虫 |
+| 资产查询 | 端口 / 主机 / 域名 / 风险（漏洞）四类资产 |
+| 编码工具 | 编解码（53 种方法）/ 自动解码 / URL 提取 |
+| 反连 | DNSLog 域名申请与记录查询 / 反连服务器信息 |
+| 插件体系 | 插件查询（1599+）/ 插件执行 / 对包执行插件 / 标签列表 |
+| 攻防工具 | YSO payload 生成 / 反弹 shell 命令 / WebShell 管理 |
 | 批量重放 | JSON 数组批量发包 |
 | 报文解析 | 提取 method/host/headers/body/协议线索 |
 
@@ -87,23 +94,93 @@ yakit_replay(
 )
 ```
 
-## 工具清单（13 个）
+## 工具清单（43 个）
+
+### 核心重放与流量
 
 | 工具 | 说明 |
 |------|------|
 | `yakit_status()` | 引擎/GUI 状态、版本、路径 |
-| `yakit_replay(packet, auto_protocol, try_both, sync_gui_https, proxy, timeout, save_to_gui, capture, ...)` | **核心**：重放 + 协议双试 + GUI 联动 + 可选截图 |
-| `yakit_replay_batch(packets_json, is_https, concurrency)` | 批量重放 |
+| `yakit_replay(packet, auto_protocol, try_both, ...)` | **核心**：重放 + 协议双试 + GUI 联动 + 可选截图 |
+| `yakit_replay_batch(packets_json, concurrency)` | 批量重放 |
+| `yakit_query_flows(keyword, limit)` | 查询历史 HTTP 流量 |
+| `yakit_parse_packet(packet)` | 解析报文（method/host/headers/body/协议线索） |
+| `yakit_extract_url(packet)` | 从请求包提取 URL |
+
+### GUI 联动与截图
+
+| 工具 | 说明 |
+|------|------|
 | `yakit_open_webfuzzer(launch_gui)` | CDP 打开 Web Fuzzer 页面 |
 | `yakit_open_webfuzzer_with_packet(packet, is_https)` | 官方 IPC 通道新开 tab 填请求 |
 | `yakit_capture(window_title, output_dir, prefer_cdp)` | 截取 Yakit 画面（三级降级） |
-| `yakit_query_flows(keyword, limit)` | 查询历史 HTTP 流量 |
-| `yakit_parse_packet(packet)` | 解析报文 |
+
+### 历史与分组管理
+
+| 工具 | 说明 |
+|------|------|
 | `yakit_clear_history(task_id)` | 数据库层清空 Web Fuzzer 历史 |
 | `yakit_list_tasks()` | 列出 Web Fuzzer 历史任务 |
-| `yakit_list_labels()` | 列出分组标签 |
-| `yakit_add_label(label, description)` | 新建分组标签 |
-| `yakit_delete_label(hash)` | 删除分组标签 |
+| `yakit_list_labels()` / `yakit_add_label()` / `yakit_delete_label()` | 分组标签增/查/删 |
+
+### MITM 中间人抓包
+
+| 工具 | 说明 |
+|------|------|
+| `yakit_mitm_start(port, filters)` | 启动 MITM 监听（后台流） |
+| `yakit_mitm_stop()` | 停止 MITM |
+| `yakit_mitm_status()` | MITM 运行状态 |
+| `yakit_mitm_flows(after_id, limit)` | 增量获取 MITM 抓到的流量 |
+
+### 主动扫描
+
+| 工具 | 说明 |
+|------|------|
+| `yakit_port_scan(targets, ports, mode, concurrent)` | 端口扫描 |
+| `yakit_simple_detect(target)` | 漏洞检测（nuclei 引擎） |
+| `yakit_start_brute(target, types, username_dict, password_dict)` | 弱口令爆破（26 种类型） |
+| `yakit_brute_types()` | 可用爆破类型 |
+| `yakit_basic_crawler(target, max_depth, max_urls)` | 基础爬虫 |
+
+### 资产与漏洞查询
+
+| 工具 | 说明 |
+|------|------|
+| `yakit_query_ports(ip, limit)` | 端口资产查询 |
+| `yakit_query_hosts(keyword, limit)` | 主机资产查询 |
+| `yakit_query_domains(keyword, limit)` | 域名资产查询 |
+| `yakit_query_risks(keyword, severity, limit)` | 漏洞/风险查询 |
+
+### 编码与反连
+
+| 工具 | 说明 |
+|------|------|
+| `yakit_codec(text, codec_type)` | 编解码（53 种方法） |
+| `yakit_codec_methods()` | 可用编解码方法列表 |
+| `yakit_auto_decode(data)` | 自动解码（无需指定编码） |
+| `yakit_dnslog_domain()` | 申请 DNSLog 反连域名 |
+| `yakit_dnslog_query(token)` | 查询 DNSLog 记录 |
+| `yakit_reverse_server()` | 全局反连服务器信息 |
+
+### 插件体系
+
+| 工具 | 说明 |
+|------|------|
+| `yakit_query_plugins(keyword, tags, limit)` | 查询本地插件（1599+） |
+| `yakit_exec_plugin(script_name, params)` | 执行插件（按名查 id） |
+| `yakit_exec_packet_plugin(script_name, packet)` | 对 HTTP 包执行插件 |
+| `yakit_plugin_tags()` | 插件标签列表 |
+
+### 攻防工具
+
+| 工具 | 说明 |
+|------|------|
+| `yakit_yso_generate(gadget, class_name, options)` | YSO 序列化 payload 生成（dnslog/win_cmd 等） |
+| `yakit_yso_gadgets()` | YSO gadget 列表 |
+| `yakit_reverse_shell(ip, port, system, shell_type)` | 反弹 shell 命令生成 |
+| `yakit_reverse_shell_programs()` | 反弹 shell 程序列表 |
+| `yakit_webshell_query(tag, limit)` | WebShell 列表查询 |
+| `yakit_webshell_ping(id)` | Ping WebShell（按 id） |
 
 ## 协议识别与双试探
 
@@ -176,7 +253,7 @@ yakit-mcp/
 ├── protos/
 │   └── grpc.proto        # Yakit gRPC 协议定义（从 app.asar 提取）
 ├── yakit_mcp/
-│   ├── server.py         # 入口 + 13 个 MCP 工具
+│   ├── server.py         # 入口 + 43 个 MCP 工具
 │   ├── engine.py         # 引擎管理/认证/重放/协议识别/历史管理
 │   ├── cdp.py            # CDP 控制 GUI（send-to-tab/填包/发送/截图）
 │   ├── capture.py        # PrintWindow 窗口截图
