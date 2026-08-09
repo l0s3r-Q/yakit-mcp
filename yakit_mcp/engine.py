@@ -17,6 +17,17 @@ import grpc
 from . import grpc_pb2 as ypb
 from . import grpc_pb2_grpc as ygrpc
 
+
+class _AuthInterceptor(grpc.UnaryUnaryClientInterceptor):
+    """gRPC 客户端拦截器: 为每个请求注入 authorization metadata（local-password 模式）"""
+
+    def __init__(self, metadata):
+        self._metadata = metadata
+
+    def intercept_unary_unary(self, continuation, client_call_details, request):
+        new_details = client_call_details._replace(metadata=self._metadata)
+        return continuation(new_details, request)
+
 # ---------------------------------------------------------------------------
 # 常量
 # ---------------------------------------------------------------------------
@@ -130,6 +141,12 @@ class YakEngine:
         if self.auto_start and not self.is_running():
             if not self.start():
                 raise RuntimeError(f"引擎启动失败（{self.host}:{self.port}），请检查日志")
+        # GUI 引擎 local-password 模式(9011): 从引擎进程命令行提取随机密码
+        auth_metadata = None
+        if self.port == 9011:
+            pwd = self._grab_engine_password()
+            if pwd:
+                auth_metadata = (("authorization", f"bearer {pwd}"),)
         self._channel = grpc.insecure_channel(
             f"{self.host}:{self.port}",
             options=[
@@ -141,8 +158,39 @@ class YakEngine:
             grpc.channel_ready_future(self._channel).result(timeout=10)
         except Exception as e:
             raise RuntimeError(f"gRPC 连接失败: {e!r}")
-        self._stub = ygrpc.YakStub(self._channel)
+        if auth_metadata:
+            self._stub = ygrpc.YakStub(grpc.intercept_channel(self._channel, _AuthInterceptor(auth_metadata)))
+        else:
+            self._stub = ygrpc.YakStub(self._channel)
         return self._stub
+
+    @staticmethod
+    def _extract_password_from_cmd(cmdline: str) -> str | None:
+        """从引擎命令行提取 --local-password 后的密码"""
+        import re
+        m = re.search(r'--local-password\s+(\S+)', cmdline)
+        if m:
+            pwd = m.group(1).strip().strip('"')
+            if pwd and pwd not in ('""', "''"):
+                return pwd
+        return None
+
+    def _grab_engine_password(self) -> str | None:
+        """从 yak 引擎进程命令行抓 local-password（GUI 每次启动生成的随机密码）"""
+        try:
+            import subprocess
+            r = subprocess.run(
+                ['powershell', '-NoProfile', '-Command',
+                 "Get-CimInstance Win32_Process | Where-Object { $_.Name -like '*yak*' } | ForEach-Object { $_.CommandLine }"],
+                capture_output=True, text=True, timeout=15)
+            for line in r.stdout.split('\n'):
+                if 'grpc' in line and '--local-password' in line:
+                    pwd = self._extract_password_from_cmd(line)
+                    if pwd:
+                        return pwd
+        except Exception:
+            pass
+        return None
 
     def _probe_engine_port(self) -> int | None:
         """探测可能存在的引擎端口（GUI 引擎实际端口）"""
