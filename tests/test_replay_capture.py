@@ -5,7 +5,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 from yakit_mcp.server import yakit_replay
 
-out = r"D:\Administrator\桌面\AI工作区\skills&mcp制作\yakit-mcp\tmp\shots"
+out = r"%WORKSPACE%\yakit-mcp\tmp\shots"
 r = json.loads(yakit_replay(
     """GET /get HTTP/1.1
 Host: httpbin.org

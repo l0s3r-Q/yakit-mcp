@@ -95,7 +95,7 @@ Agent: yakit_replay(packet="...", is_https=True, capture=True)
 
 ## 部署信息
 
-- MCP: `C:\Users\36078\skills\mcp\yakit-mcp\`（python -m yakit_mcp.server）
-- 真源: `D:\Administrator\桌面\AI工作区\skills&mcp制作\yakit-mcp\`
-- 引擎: Yakit 安装目录 `D:\My_apps\Yakit\bins\yak.zip`（自动解压到 `%LOCALAPPDATA%\yakit-mcp\engine\`）
+- MCP: `%LOCAL_HOME%\skills\mcp\yakit-mcp\`（python -m yakit_mcp.server）
+- 真源: `%WORKSPACE%\yakit-mcp\`
+- 引擎: Yakit 安装目录 `%YAKIT_DIR%\bins\yak.zip`（自动解压到 `%LOCALAPPDATA%\yakit-mcp\engine\`）
 - proto: 从 Yakit GUI `app.asar` 提取（`protos/grpc.proto`）

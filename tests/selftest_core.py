@@ -41,7 +41,7 @@ if q.get("flows"):
     print("最新一条:", json.dumps(q["flows"][0], ensure_ascii=False))
 
 print("\n=== 6. 截图（无 GUI 时预期失败但优雅返回）===")
-cap = capture_window("Yakit", output_dir=r"D:\Administrator\桌面\AI工作区\skills&mcp制作\yakit-mcp\tmp\shots")
+cap = capture_window("Yakit", output_dir=r"%WORKSPACE%\yakit-mcp\tmp\shots")
 print(json.dumps({k: (v if k != 'image_base64' else f"<{len(v)} chars>") for k, v in cap.items()}, ensure_ascii=False))
 
 eng.close()

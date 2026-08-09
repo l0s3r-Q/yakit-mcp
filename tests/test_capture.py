@@ -10,7 +10,7 @@ rect = find_window_rect("Yakit", timeout=5)
 print("窗口矩形:", json.dumps(rect, ensure_ascii=False) if rect else "未找到")
 
 print("\n=== 截图 ===")
-cap = capture_window("Yakit", output_dir=r"D:\Administrator\桌面\AI工作区\skills&mcp制作\yakit-mcp\tmp\shots")
+cap = capture_window("Yakit", output_dir=r"%WORKSPACE%\yakit-mcp\tmp\shots")
 print("ok:", cap.get("ok"))
 print("title:", cap.get("title"))
 print("size:", cap.get("size"))

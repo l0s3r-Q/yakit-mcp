@@ -39,7 +39,7 @@
 
 - Windows（本工具面向 Windows + Yakit 桌面版）
 - Python 3.11+
-- Yakit 桌面版（`D:\My_apps\Yakit\Yakit.exe` 或自动探测）
+- Yakit 桌面版（`%YAKIT_DIR%\Yakit.exe` 或自动探测）
 
 ### 安装
 
