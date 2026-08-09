@@ -337,24 +337,39 @@ def detect_protocol(packet_text: str) -> str:
         return "unknown"
 
 
-def push_webfuzzer_tab(engine: YakEngine, packet: str, is_https: bool = False) -> dict:
+def push_webfuzzer_tab(engine: YakEngine, packet: str, is_https: bool = False, tab_name: str = "MCP") -> dict:
     """
     【官方通道】通过 gRPC DuplexConnection 推送 web_fuzzer_tab 事件，
     让 GUI 自动新建 Web Fuzzer tab 并填入请求（源码确认: MCP/后端通知前端新建 Web Fuzzer Tab）。
     彻底绕开 Monaco 编辑器填包（解决旧内容残留 + 填包问题）。
+    Config 结构对齐源码 MultipleNodeInfo（含 id/verbose/groupId/pageParams.request），
+    openFlag=true 时前端 setCurrentTabKey 切到新 tab 前台显示。
     返回: {ok, sent, reason}
     """
     stub = engine.connect()
     try:
-        # 构造 duplex 请求: MessageType="web_fuzzer_tab", Data=JSON payload
+        import time as _time
+        # 构造 Config: 对齐 MultipleNodeInfo / ComponentParams 结构（源码 MainOperatorContentType.d.ts）
+        config = {
+            "id": f"mcp-{int(_time.time() * 1000)}",
+            "verbose": tab_name,
+            "groupId": "0",
+            "sortFieId": 1,
+            "pageParams": {
+                "id": f"mcp-{int(_time.time() * 1000)}",
+                "groupId": "0",
+                "isHttps": is_https,
+                "request": packet,
+                "advancedConfigValue": {},
+            },
+        }
         payload = {
             "openFlag": True,
             "data": [
                 {
-                    "Config": json.dumps({
-                        "isHttps": is_https,
-                        "request": packet,
-                    }, ensure_ascii=False)
+                    "PageId": "",
+                    "Type": "page",
+                    "Config": json.dumps(config, ensure_ascii=False)
                 }
             ],
         }

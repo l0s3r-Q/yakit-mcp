@@ -238,30 +238,27 @@ def yakit_replay(
             import time
             time.sleep(wait_gui_seconds)
         out_dir = capture_output_dir or _default_output_dir()
+        # 0) 官方通道: gRPC 推送新 tab（带请求，源码确认的 MCP 通道，绕开 Monaco）
+        from .engine import push_webfuzzer_tab
+        try:
+            push_r = push_webfuzzer_tab(engine, packet,
+                                        is_https=(result.get("selected_protocol") == "https"),
+                                        tab_name="MCP-重放")
+            result["push_tab"] = push_r.get("ok", False)
+        except Exception:
+            result["push_tab"] = False
+        time.sleep(2)
         # 1) CDP 全自动: 打开 Web Fuzzer 页面 + 页面级截图
         if cdp_ready(9333, timeout=2):
             from .engine import find_yakit_gui
             gui = find_yakit_gui() or ""
             ow = open_webfuzzer(gui_path=gui)
             time.sleep(1)
-            # 新开 Web Fuzzer tab（干净编辑器，避免旧内容残留）+ 填包 + 发送
-            nt = cdp_new_webfuzzer_tab()
-            time.sleep(1)
-            fs = cdp_fill_and_send(packet=packet, force_https=result.get("selected_protocol") == "https" if result.get("selected_protocol") else None)
-            time.sleep(2)
             cap = cdp_screenshot(9333, output_dir=out_dir)
             if cap.get("ok"):
                 cap["webfuzzer_opened"] = ow.get("clicked", "")
-                cap["new_tab"] = str(nt)
-                cap["fill_send"] = fs
+                cap["push_tab_ok"] = result["push_tab"]
                 result["capture"] = cap
-                # 截图后关闭新开的 tab，防止窗口堆积卡顿
-                if str(nt) and 'clicked' in str(nt):
-                    try:
-                        cl = cdp_close_webfuzzer_tab()
-                        result["capture"]["tab_closed"] = str(cl)
-                    except Exception:
-                        pass
                 return json.dumps(result, ensure_ascii=False, indent=2, default=str)
         # 2) PrintWindow 窗口截图（无视遮挡）
         cap = capture_window_clean(capture_title, output_dir=out_dir, timeout=8.0)
