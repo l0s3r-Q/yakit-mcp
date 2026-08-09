@@ -45,7 +45,12 @@ from yakit_mcp.engine import (
     basic_crawler,
     brute_types,
     clear_fuzzer_history,
+    codec,
+    codec_methods,
     delete_fuzzer_label,
+    dnslog_domain,
+    dnslog_query,
+    extract_url,
     find_yakit_engine,
     find_yakit_gui,
     list_fuzzer_history,
@@ -703,6 +708,54 @@ def yakit_query_risks(keyword: str = "", limit: int = 50, severity: str = "") ->
     """
     engine = get_engine()
     r = query_risks(engine, keyword, limit, severity)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# 编码与反连工具
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def yakit_codec(text: str, codec_type: str = "base64-encode") -> str:
+    """
+    编解码（Yakit Codec 引擎）。
+    参数:
+      text: 要编解码的内容
+      codec_type: 方法（base64-encode/base64-decode/url-encode/url-decode/hex/md5/... 用 yakit_codec_methods 查）
+    """
+    engine = get_engine()
+    r = codec(engine, text, codec_type)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_codec_methods() -> str:
+    """获取可用编解码方法列表（如 base64-encode/url-encode/hex/md5/sha1...）。"""
+    engine = get_engine()
+    r = codec_methods(engine)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_dnslog_domain() -> str:
+    """获取 DNSLog 反连域名（用于 SSRF/命令注入等漏洞验证）。"""
+    engine = get_engine()
+    r = dnslog_domain(engine)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_dnslog_query(token: str) -> str:
+    """查询 DNSLog 记录（验证目标是否请求了反连域名）。"""
+    engine = get_engine()
+    r = dnslog_query(engine, token)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def yakit_extract_url(packet: str) -> str:
+    """从 HTTP 请求包提取 URL。"""
+    engine = get_engine()
+    r = extract_url(engine, packet)
     return json.dumps(r, ensure_ascii=False, indent=2)
 
 

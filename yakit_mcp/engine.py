@@ -989,3 +989,76 @@ def query_risks(engine: YakEngine, keyword: str = "", limit: int = 50,
         return {"ok": True, "total": resp.Total, "risks": items}
     except Exception as e:
         return {"ok": False, "reason": repr(e)}
+
+
+# ---------------------------------------------------------------------------
+# 编码工具: Codec / DNSLog / 反连
+# ---------------------------------------------------------------------------
+def codec(engine: YakEngine, text: str, codec_type: str = "base64-encode") -> dict:
+    """编解码（Codec）。codec_type 用 yakit_codec_methods 查（如 base64-encode/url-encode/hex）"""
+    stub = engine.connect()
+    try:
+        req = ypb.CodecRequest()
+        req.Text = text
+        req.Type = codec_type
+        resp = stub.Codec(req, timeout=30)
+        return {"ok": True, "type": codec_type, "input": text[:500],
+                "result": resp.Result[:5000] if resp.Result else ""}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def codec_methods(engine: YakEngine) -> dict:
+    """获取可用编解码方法列表"""
+    stub = engine.connect()
+    try:
+        resp = stub.GetAllCodecMethods(ypb.Empty())
+        methods = []
+        for m in resp.Methods or []:
+            methods.append({"name": m.Name, "verbose": m.Verbose, "group": m.Group})
+        return {"ok": True, "total": len(methods), "methods": methods[:200]}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def dnslog_domain(engine: YakEngine) -> dict:
+    """获取 DNSLog 反连域名"""
+    stub = engine.connect()
+    try:
+        resp = stub.RequireDNSLogDomain(ypb.YakDNSLogBridgeAddr())
+        return {"ok": True, "domain": resp.Domain}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def dnslog_query(engine: YakEngine, token: str) -> dict:
+    """查询 DNSLog 记录"""
+    stub = engine.connect()
+    try:
+        req = ypb.QueryDNSLogByTokenRequest()
+        req.Token = token
+        resp = stub.QueryDNSLogByToken(req)
+        logs = []
+        for l in resp.Data or []:
+            logs.append({
+                "domain": l.Domain,
+                "type": l.Type,
+                "remote_addr": l.RemoteAddr,
+                "raw": (l.Raw or "")[:300],
+                "timestamp": l.Timestamp,
+            })
+        return {"ok": True, "token": token, "logs": logs}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def extract_url(engine: YakEngine, packet: str) -> dict:
+    """从 HTTP 包提取 URL"""
+    stub = engine.connect()
+    try:
+        req = ypb.FuzzerRequest()
+        req.Request = packet
+        resp = stub.ExtractUrl(req, timeout=30)
+        return {"ok": True, "url": resp.Url}
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
